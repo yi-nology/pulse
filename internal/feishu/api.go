@@ -1,7 +1,8 @@
 // Package feishu 是飞书开放平台的 Minimal 客户端基座：tenant_access_token 获取/缓存/过期前刷新、
 // 限流（429/99991400）指数退避重试、按 base（appToken）串行写，并把全部飞书 HTTP 交互
 // 收口到 bitableAPI 接口——bind/sync/publish 只依赖该接口，测试注入 fake 实现或 httptest 地址。
-// 本包零 internal/store 依赖，也不含任何 LLM 逻辑。
+// Client 基座零 internal/store 依赖；bind 等上层能力经 store.SaveProject 写回 token（见 bind.go）。
+// 本包不含任何 LLM 逻辑。
 package feishu
 
 import (
