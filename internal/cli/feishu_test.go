@@ -307,6 +307,48 @@ func TestFeishuPublishEndToEnd(t *testing.T) {
 	}
 }
 
+// TestFeishuPublishAutoCreatesDoc：未绑定文档（采用模式省略 --doc）首次 publish
+// 自动建档后，CLI 输出与 store 落库都必须是真实的新 token，而非空串。
+func TestFeishuPublishAutoCreatesDoc(t *testing.T) {
+	s, _ := feishuTestEnv(t)
+	if _, err := s.CreateProject("demo", "演示", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, docN, blockN, _ := newFakeFeishu(t)
+	if _, _, err := runCLI(t, "feishu", "bind", "--project", "demo"); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	p, found, err := s.GetProjectByKey("demo")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	p.FeishuDocToken = "" // 模拟采用模式未绑 doc
+	if err := s.SaveProject(p); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, err := runCLI(t, "feishu", "publish", "--project", "demo", "--report", "weekly")
+	if err != nil {
+		t.Fatalf("publish: %v stderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "docD") {
+		t.Fatalf("stdout %q must contain 新文档 token docD", out)
+	}
+	saved, _, err := s.GetProjectByKey("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.FeishuDocToken != "docD" {
+		t.Fatalf("store doc token = %q, want docD", saved.FeishuDocToken)
+	}
+	if n := docN.Load(); n != 2 { // bind 1 次 + publish 自动补建 1 次
+		t.Fatalf("DocCreate 次数 = %d, want 2", n)
+	}
+	if n := blockN.Load(); n != 1 {
+		t.Fatalf("BlockAppend 次数 = %d, want 1", n)
+	}
+}
+
 // assertActivity 断言窗口内存在指定 action 的活动且触发人可解析到成员名
 // （publish 测试现场已有多条活动，不能用恰好一条的 requireActivity）。
 func assertActivity(t *testing.T, s *store.Store, projectID int64, action, actorName string) {

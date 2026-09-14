@@ -162,6 +162,11 @@ func newFeishuPublishCmd() *cobra.Command {
 			if err := feishu.PublishReport(ctx, c, s, p, report, a.Name); err != nil {
 				return err
 			}
+			// PublishReport 按值接收项目：自动建档路径补建的 doc token 只在函数内
+			// 副本上，输出前必须从 store 重读，否则未绑文档的首次 publish 打印空 token。
+			if fresh, found, err := s.GetProjectByKey(p.Key); err == nil && found {
+				p = fresh
+			}
 			if err := logAction(s, a, behalf, p.ID, "feishu_publish", "project", p.ID); err != nil {
 				return err
 			}

@@ -74,6 +74,11 @@ func publishReportForMCP(st *store.Store, cfg *config.Config, projectKey, report
 	if err := feishu.PublishReport(ctx, c, st, p, report, a.Name); err != nil {
 		return nil, err
 	}
+	// PublishReport 按值接收项目：自动建档路径补建的 doc token 只在函数内副本上，
+	// 从 store 重读保证返回给代理的 doc 非空且与落库一致。
+	if fresh, found, err := st.GetProjectByKey(projectKey); err == nil && found {
+		p = fresh
+	}
 	return map[string]any{
 		"ok": true, "project": p.Key, "report": report,
 		"doc": p.FeishuDocToken, "actor": a.Name,
