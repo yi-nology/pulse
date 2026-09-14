@@ -107,15 +107,46 @@ type agentCount struct {
 	Count int
 }
 
-// WeeklyMarkdown 生成项目周报（Markdown）：本周完成、进行中、风险清单、
-// 未排期、Agent 贡献。窗口 = now 所在 ISO 自然周（周一 00:00 UTC 起 7 天）。
+// nextWeekPlan 下周计划：未 done 且 start_date 或 due_date 落在下周自然周
+// 窗口 [本周一+7d, 本周一+14d)（UTC，与周报窗口同口径）的任务；
+// 按 due 升序（无 due 排后，再按 id），与"进行中"（状态视图）正交可重叠。
+func nextWeekPlan(tasks []model.Task, from, to time.Time) []model.Task {
+	inNext := func(d time.Time) bool { return !d.Before(from) && d.Before(to) }
+	var out []model.Task
+	for _, t := range tasks {
+		if t.Status == "done" {
+			continue
+		}
+		sd, okS := parseDate(t.StartDate)
+		dd, okD := parseDate(t.DueDate)
+		if (okS && inNext(sd)) || (okD && inNext(dd)) {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		di, oki := parseDate(out[i].DueDate)
+		dj, okj := parseDate(out[j].DueDate)
+		if oki != okj {
+			return oki // 有 due 的排前面
+		}
+		if oki && !di.Equal(dj) {
+			return di.Before(dj)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// WeeklyMarkdown 生成项目周报（Markdown）：本周完成、进行中、下周计划、
+// 风险清单、未排期、Agent 贡献。窗口 = now 所在 ISO 自然周（周一 00:00 UTC 起 7 天）。
 func WeeklyMarkdown(s *store.Store, projectID int64, now time.Time) ([]byte, error) {
 	p, err := lookupProject(s, projectID)
 	if err != nil {
 		return nil, err
 	}
-	from, to := isoWeekWindow(now)
-	acts, err := s.ActivitiesInWindow(projectID, from, to)
+	weekFrom, weekTo := isoWeekWindow(now)
+	nextFrom, nextTo := weekTo, weekTo.AddDate(0, 0, 7)
+	acts, err := s.ActivitiesInWindow(projectID, weekFrom, weekTo)
 	if err != nil {
 		return nil, fmt.Errorf("reports: weekly activities: %w", err)
 	}
@@ -149,15 +180,18 @@ func WeeklyMarkdown(s *store.Store, projectID int64, now time.Time) ([]byte, err
 		}
 	}
 	agents := agentContribution(acts, members)
+	planned := nextWeekPlan(tasks, nextFrom, nextTo)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# 周报 · %s（%s ~ %s）\n\n", p.Key,
-		from.Format(layoutDate), to.AddDate(0, 0, -1).Format(layoutDate))
+		weekFrom.Format(layoutDate), weekTo.AddDate(0, 0, -1).Format(layoutDate))
 
 	b.WriteString("## 本周完成\n")
 	writeTaskList(&b, completedTasks)
 	b.WriteString("\n## 进行中\n")
 	writeTaskList(&b, inProgress)
+	b.WriteString("\n## 下周计划\n")
+	writeTaskList(&b, planned)
 
 	b.WriteString("\n## 风险清单\n")
 	if len(risks) == 0 {

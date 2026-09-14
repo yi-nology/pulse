@@ -183,6 +183,44 @@ func TestWeeklyCompletionAndAgentContribution(t *testing.T) {
 	}
 }
 
+// TestWeeklyNextWeekPlan 下周计划口径：未 done 且 start/due 落在下周自然周
+// [下周一, 下下周一) 的任务，按 due 升序（无 due 排后，再按 id）。
+// now = 2026-09-15（周二）→ 下周窗口 = [2026-09-21, 2026-09-28)。
+func TestWeeklyNextWeekPlan(t *testing.T) {
+	s := newStore(t)
+	p := projectOf(t, s)
+	mk := func(title, start, due string, done bool) model.Task {
+		st := "todo"
+		if done {
+			st = "done"
+		}
+		return taskOf(t, s, p.ID, func(m *model.Task) {
+			m.Title, m.StartDate, m.DueDate, m.Status = title, start, due, st
+		})
+	}
+	mk("下周启动无due", "2026-09-22", "", false) // start 下周 → 计入（无 due 排最后）
+	mk("本周到期", "", "2026-09-18", false)     // due 本周 → 不计入
+	mk("下周到期", "", "2026-09-25", false)     // due 下周 → 计入
+	mk("边界下周一", "", "2026-09-21", false)    // due = 下周一（窗口含起点）→ 计入
+	mk("边界本周一", "", "2026-09-14", false)    // due = 本周一（窗口外）→ 不计入
+	mk("已完成下周到期", "", "2026-09-24", true)   // done → 不计入
+
+	out, err := WeeklyMarkdown(s, p.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := section(string(out), "下周计划")
+	want := "- #4 边界下周一\n- #3 下周到期\n- #1 下周启动无due"
+	if strings.TrimSpace(plan) != want {
+		t.Fatalf("下周计划 =\n%s\nwant:\n%s", plan, want)
+	}
+	for _, notWant := range []string{"#2 本周到期", "#5 边界本周一", "#6 已完成下周到期"} {
+		if strings.Contains(plan, notWant) {
+			t.Fatalf("下周计划 must NOT contain %q, got:\n%s", notWant, plan)
+		}
+	}
+}
+
 // ---- golden 测试 ----
 
 var updateGolden = flag.Bool("update", false, "重新生成 golden 文件（go test ./internal/reports/ -update）")
