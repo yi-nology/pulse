@@ -70,7 +70,44 @@ func resolveAssigneeFlag(s *store.Store, cmd *cobra.Command, name string) (*int6
 // newTaskCmd 实现 `pulse task` 子命令组。
 func newTaskCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "任务管理（增删改查，done 任务改回其他状态记 reopen）"}
-	cmd.AddCommand(newTaskAddCmd(), newTaskListCmd(), newTaskUpdateCmd(), newTaskRmCmd())
+	cmd.AddCommand(newTaskAddCmd(), newTaskListCmd(), newTaskUpdateCmd(), newTaskRmCmd(), newTaskDepCmd())
+	return cmd
+}
+
+// newTaskDepCmd 实现 `pulse task dep <id> --on <taskID>`：为任务添加依赖（add_dependency 活动由 store 落库）。
+func newTaskDepCmd() *cobra.Command {
+	var on string
+	cmd := &cobra.Command{
+		Use:   "dep <id>",
+		Short: "为任务添加依赖（本任务须等 --on 任务完成后才能开始）",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("任务 ID 须为整数，收到 %q", args[0])
+			}
+			onID, err := strconv.ParseInt(on, 10, 64)
+			if err != nil {
+				return fmt.Errorf("任务 ID 须为整数，收到 %q", on)
+			}
+			s, cfg, err := openApp()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			a, behalf, err := resolveActor(s, cfg, cmd)
+			if err != nil {
+				return err
+			}
+			if err := s.AddDependency(id, onID, a, behalf); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "依赖已添加: 任务 %d 依赖任务 %d\n", id, onID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&on, "on", "", "被依赖的任务 ID（必填）")
+	_ = cmd.MarkFlagRequired("on")
 	return cmd
 }
 
