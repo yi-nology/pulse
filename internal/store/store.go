@@ -91,6 +91,11 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if path == ":memory:" {
+		// 每个池化连接都是一块独立的空内存库；多连接会导致"no such table"，
+		// 因此 :memory: 必须限制为单连接（文件路径库保持默认连接池 + busy_timeout）。
+		db.SetMaxOpenConns(1)
+	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
