@@ -172,7 +172,7 @@ type listTasksIn struct {
 type addTaskIn struct {
 	Project      string   `json:"project" jsonschema:"项目 key（必填）"`
 	Title        string   `json:"title" jsonschema:"任务标题（必填）"`
-	Assignee     *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）"`
+	Assignee     *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己"`
 	Status       string   `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done，缺省 todo"`
 	Priority     *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先，缺省 3"`
 	EstimateDays *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
@@ -189,7 +189,7 @@ type updateTaskIn struct {
 	ID           int64    `json:"id" jsonschema:"任务 ID（必填，先 list_tasks 确认）"`
 	Title        *string  `json:"title,omitempty" jsonschema:"新标题"`
 	Desc         *string  `json:"desc,omitempty" jsonschema:"任务描述"`
-	Assignee     *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；空串清空"`
+	Assignee     *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己；空串清空"`
 	Status       *string  `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done"`
 	Priority     *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先"`
 	EstimateDays *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
@@ -354,6 +354,25 @@ func (c *core) assigneeFilter(name string) (int64, error) {
 	return 0, fmt.Errorf("成员不存在: %s", name)
 }
 
+// assigneeWrite 写路径（add/update_task）的 assignee 解析："me" 一律解析为 agent
+// 自己（与执行 actor 同一成员，get-or-create）；其余名字按 human get-or-create。
+// 与 CLI 的纯 human 语义不同：MCP 工具入参由 LLM 生成，"me" 是最自然的指代，
+// 若按字面建 human 成员会误归属任务。
+func (c *core) assigneeWrite(name string) (int64, error) {
+	if name == "me" {
+		a, _, err := c.resolve("")
+		if err != nil {
+			return 0, err
+		}
+		return a.ID, nil
+	}
+	m, err := c.st.GetOrCreateMember(name, "human")
+	if err != nil {
+		return 0, err
+	}
+	return m.ID, nil
+}
+
 // taskViews 为任务列表补人读名称；保证返回非 nil 空数组。
 func (c *core) taskViews(projectID int64, tasks []model.Task) ([]taskView, error) {
 	members, err := c.st.ListMembers()
@@ -421,12 +440,11 @@ func (c *core) addTask(_ context.Context, _ *mcp.CallToolRequest, in addTaskIn) 
 	if in.EstimateDays != nil {
 		t.EstimateDays = *in.EstimateDays
 	}
-	if in.Assignee != nil && *in.Assignee != "" { // 与 CLI add 一致：空串 = 不设负责人
-		m, err := c.st.GetOrCreateMember(*in.Assignee, "human")
+	if in.Assignee != nil && *in.Assignee != "" { // 空串 = 不设负责人；"me" = agent 自己
+		t.AssigneeID, err = c.assigneeWrite(*in.Assignee)
 		if err != nil {
 			return nil, nil, err
 		}
-		t.AssigneeID = m.ID
 	}
 	if in.Version != "" {
 		t.VersionID, err = c.st.ResolveVersionID(p.ID, in.Version)
@@ -480,11 +498,11 @@ func (c *core) updateTask(_ context.Context, _ *mcp.CallToolRequest, in updateTa
 			zero := int64(0)
 			ch.AssigneeID = &zero // 显式空串 = 清空负责人（CLI 同语义）
 		} else {
-			m, err := c.st.GetOrCreateMember(*in.Assignee, "human")
+			id, err := c.assigneeWrite(*in.Assignee) // "me" = agent 自己
 			if err != nil {
 				return nil, nil, err
 			}
-			ch.AssigneeID = &m.ID
+			ch.AssigneeID = &id
 		}
 	}
 	if in.Version != nil {

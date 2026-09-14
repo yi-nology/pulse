@@ -259,6 +259,63 @@ func TestAssigneeMe(t *testing.T) {
 	}
 }
 
+// TestAddTaskAssigneeMe 写路径 assignee="me" 解析为 agent 自己（type=agent），
+// 不得创建名为 "me" 的人类成员。
+func TestAddTaskAssigneeMe(t *testing.T) {
+	s := testEnv(t)
+	requireProject(t, s, "demo")
+	sc := connect(t, s, "claude")
+
+	created := decode(t, callTool(t, sc, "add_task",
+		map[string]any{"project": "demo", "title": "t1", "assignee": "me"}))
+
+	ms, err := s.ListMembers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agent model.Member
+	for _, m := range ms {
+		if m.Name == "me" {
+			t.Fatalf(`assignee="me" must not create a member named "me": %+v`, ms)
+		}
+		if m.Name == "claude" {
+			agent = m
+		}
+	}
+	if agent.ID == 0 || agent.Type != "agent" {
+		t.Fatalf("claude must be the agent member: %+v", agent)
+	}
+	if created["AssigneeID"] != float64(agent.ID) || created["assignee_name"] != "claude" {
+		t.Fatalf(`add_task assignee="me" must resolve to agent %d: %s`, agent.ID, string(mustJSON(created)))
+	}
+}
+
+// TestUpdateTaskAssigneeMe update_task 的 assignee="me" 把任务改派给 agent 自己。
+func TestUpdateTaskAssigneeMe(t *testing.T) {
+	s := testEnv(t)
+	requireProject(t, s, "demo")
+	sc := connect(t, s, "claude")
+
+	created := decode(t, callTool(t, sc, "add_task",
+		map[string]any{"project": "demo", "title": "t1", "assignee": "alice"}))
+	updated := decode(t, callTool(t, sc, "update_task",
+		map[string]any{"id": created["ID"], "assignee": "me"}))
+
+	agent := memberByName(t, s, "claude")
+	if updated["AssigneeID"] != float64(agent.ID) || updated["assignee_name"] != "claude" {
+		t.Fatalf(`update_task assignee="me" must reassign to agent %d: %s`, agent.ID, string(mustJSON(updated)))
+	}
+	ms, err := s.ListMembers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.Name == "me" {
+			t.Fatalf(`no member named "me" must be created: %+v`, ms)
+		}
+	}
+}
+
 // TestDelegatedBy delegated_by 把人类成员记为 on_behalf_of，执行者仍是 agent。
 func TestDelegatedBy(t *testing.T) {
 	s := testEnv(t)
