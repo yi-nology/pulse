@@ -33,6 +33,9 @@ type fakeAPI struct {
 	updateErr     error               // RecordUpdate 注入失败
 	createdFields []map[string]any    // 每次 RecordCreate 收到的 fields（按调用序）
 	updatedFields []map[string]any    // 每次 RecordUpdate 收到的 fields（按调用序）
+
+	// —— publish 测试扩展 ————————————————————————————
+	blockBlocks [][]map[string]any // 每次 BlockAppend 收到的块序列（按调用序）
 }
 
 func (f *fakeAPI) record(method string, args ...string) {
@@ -99,6 +102,7 @@ func (f *fakeAPI) DocCreate(ctx context.Context, folderToken, title string) (str
 
 func (f *fakeAPI) BlockAppend(ctx context.Context, docToken string, blocks []map[string]any) error {
 	f.record("BlockAppend", docToken)
+	f.blockBlocks = append(f.blockBlocks, blocks)
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,10 +13,10 @@ import (
 	"github.com/zhangyi/pulse/internal/model"
 )
 
-// newFeishuCmd 实现 `pulse feishu` 子命令组（bind；Task 13 追加 publish）。
+// newFeishuCmd 实现 `pulse feishu` 子命令组（bind / publish）。
 func newFeishuCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "feishu", Short: "飞书集成（bind 创建/绑定同步 base 与沉淀文档）"}
-	cmd.AddCommand(newFeishuBindCmd())
+	cmd := &cobra.Command{Use: "feishu", Short: "飞书集成（bind 创建/绑定同步 base 与沉淀文档，publish 沉淀报表）"}
+	cmd.AddCommand(newFeishuBindCmd(), newFeishuPublishCmd())
 	return cmd
 }
 
@@ -120,4 +121,58 @@ func printBoundTokens(out io.Writer, p model.Project, missingDoc bool) {
 	if missingDoc {
 		fmt.Fprintln(out, "  提示: 未绑定文档，publish 时会自动创建并写回")
 	}
+}
+
+// newFeishuPublishCmd 实现 `pulse feishu publish --project demo --report weekly|versions|all`：
+// 先静默同步（失败仅警告，离线可发布本地数据），生成报表并追加到绑定文档；
+// 未绑定文档时自动创建并写回。每次 publish 追加新块（时间线性质，重跑产生新段落
+// 是文档化行为），顶部防混淆标题块 + 底部落款块标识来源与触发人。
+func newFeishuPublishCmd() *cobra.Command {
+	var projectKey, report string
+	cmd := &cobra.Command{
+		Use:   "publish",
+		Short: "把报表（weekly|versions|all）沉淀到项目绑定的飞书文档",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch report {
+			case "weekly", "versions", "all":
+			default:
+				return fmt.Errorf("report 必须为 weekly|versions|all，收到 %q", report)
+			}
+			s, cfg, err := openApp()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			if cfg.Feishu.AppID == "" || cfg.Feishu.AppSecret == "" {
+				return errors.New("未配置飞书：请先在 $PULSE_HOME/config.yaml 配置 feishu.app_id/app_secret" +
+					"（或设置环境变量 PULSE_FEISHU_APP_SECRET），再执行 pulse feishu bind 绑定项目")
+			}
+			p, err := requireProjectFlag(s, projectKey)
+			if err != nil {
+				return err
+			}
+			a, behalf, err := resolveActor(s, cfg, cmd)
+			if err != nil {
+				return err
+			}
+			feishu.SetWarnWriter(cmd.ErrOrStderr()) // 同步/发布的警告导向当前命令 stderr
+			c := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, os.Getenv("PULSE_FEISHU_ENDPOINT"))
+			ctx, cancel := context.WithTimeout(cmd.Context(), syncTimeout)
+			defer cancel()
+			if err := feishu.PublishReport(ctx, c, s, p, report, a.Name); err != nil {
+				return err
+			}
+			if err := logAction(s, a, behalf, p.ID, "feishu_publish", "project", p.ID); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "报表已沉淀到飞书文档: %s（report: %s，触发人: %s）\n",
+				p.FeishuDocToken, report, a.Name)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&projectKey, "project", "", "项目 key（必填）")
+	cmd.Flags().StringVar(&report, "report", "", "报表类型：weekly | versions | all（必填）")
+	_ = cmd.MarkFlagRequired("project")
+	_ = cmd.MarkFlagRequired("report")
+	return cmd
 }

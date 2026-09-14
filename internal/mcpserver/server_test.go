@@ -497,6 +497,26 @@ func TestPublishFeishuNotConfigured(t *testing.T) {
 	}
 }
 
+// TestPublishFeishuWiredHook 装配 PublishReportFunc 后 publish_feishu 把钩子返回值
+// 作为 JSON 结果回给代理（Task 13 在 cli/mcp.go 注入 feishu.PublishReport 桥接，
+// 此处用假钩子断言装配协议与结果透传）。
+func TestPublishFeishuWiredHook(t *testing.T) {
+	s := testEnv(t)
+	requireProject(t, s, "demo")
+	old := PublishReportFunc
+	PublishReportFunc = func(st *store.Store, projectKey, report string) (any, error) {
+		return map[string]any{"ok": true, "project": projectKey, "report": report, "doc": "docD"}, nil
+	}
+	t.Cleanup(func() { PublishReportFunc = old })
+
+	sc := connect(t, s, "claude")
+	out := callTool(t, sc, "publish_feishu", map[string]any{"project": "demo", "report": "weekly"})
+	v := decode(t, out)
+	if v["doc"] != "docD" || v["report"] != "weekly" || v["project"] != "demo" || v["ok"] != true {
+		t.Fatalf("wired hook 结果未透传: %s", out)
+	}
+}
+
 // TestToolDescriptions 全部工具注册在案，且 description 含规定句。
 func TestToolDescriptions(t *testing.T) {
 	s := testEnv(t)

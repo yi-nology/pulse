@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhangyi/pulse/internal/model"
 	"github.com/zhangyi/pulse/internal/rules"
 	"github.com/zhangyi/pulse/internal/store"
 )
@@ -83,25 +84,42 @@ func riskTaskID(title string) (int64, bool) {
 // 全量计算后，依据标题 "#<id>" 前缀归属到任务所在版本；超载等无法归属的
 // 汇入"其他风险"）。
 func VersionsHTML(s *store.Store, projectID int64, now time.Time) ([]byte, error) {
-	p, err := lookupProject(s, projectID)
+	p, blocks, otherRisks, err := collectVersions(s, projectID, now)
 	if err != nil {
 		return nil, err
 	}
+	return renderHTML("versions.html", versionsData{
+		Title:      "版本规划 · " + p.Key,
+		Versions:   blocks,
+		HasVersion: len(blocks) > 0,
+		OtherRiskN: len(otherRisks),
+		OtherRisks: otherRisks,
+	})
+}
+
+// collectVersions 是版本规划报表的统一数据源（VersionsHTML 与 VersionsText 共用，
+// 保证两种形态口径一致）：项目信息 + 每版本的 scope/完成度/逾期/风险摘要 +
+// 无法归属到版本的其他风险。
+func collectVersions(s *store.Store, projectID int64, now time.Time) (model.Project, []versionBlock, []string, error) {
+	p, err := lookupProject(s, projectID)
+	if err != nil {
+		return model.Project{}, nil, nil, err
+	}
 	versions, err := s.ListVersions(projectID)
 	if err != nil {
-		return nil, fmt.Errorf("reports: versions list: %w", err)
+		return model.Project{}, nil, nil, fmt.Errorf("reports: versions list: %w", err)
 	}
 	tasks, err := s.ListTasks(projectID, store.TaskFilter{})
 	if err != nil {
-		return nil, fmt.Errorf("reports: versions tasks: %w", err)
+		return model.Project{}, nil, nil, fmt.Errorf("reports: versions tasks: %w", err)
 	}
 	risks, err := rules.Evaluate(s, projectID, now, blockedDaysDefault)
 	if err != nil {
-		return nil, fmt.Errorf("reports: versions risks: %w", err)
+		return model.Project{}, nil, nil, fmt.Errorf("reports: versions risks: %w", err)
 	}
 	members, err := s.ListMembers()
 	if err != nil {
-		return nil, fmt.Errorf("reports: versions members: %w", err)
+		return model.Project{}, nil, nil, fmt.Errorf("reports: versions members: %w", err)
 	}
 
 	memberNames := make(map[int64]string, len(members))
@@ -169,14 +187,7 @@ func VersionsHTML(s *store.Store, projectID int64, now time.Time) ([]byte, error
 		blk.RiskLines = riskLines[v.ID]
 		blocks = append(blocks, blk)
 	}
-
-	return renderHTML("versions.html", versionsData{
-		Title:      "版本规划 · " + p.Key,
-		Versions:   blocks,
-		HasVersion: len(blocks) > 0,
-		OtherRiskN: len(otherRisks),
-		OtherRisks: otherRisks,
-	})
+	return p, blocks, otherRisks, nil
 }
 
 // summarizeRisks 按固定 kind 顺序输出非零计数摘要；全零为 "无"。

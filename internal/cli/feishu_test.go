@@ -2,15 +2,19 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/zhangyi/pulse/internal/config"
+	"github.com/zhangyi/pulse/internal/model"
 	"github.com/zhangyi/pulse/internal/store"
 )
 
@@ -43,11 +47,14 @@ func feishuTestEnv(t *testing.T) (*store.Store, *config.Config) {
 	return s, cfg
 }
 
-// newFakeFeishu 启动假飞书（token/建 base/建表/建视图/建文档）并把 PULSE_FEISHU_ENDPOINT
-// 指过去，返回各类调用计数供断言。
-func newFakeFeishu(t *testing.T) (appCreates, tableCreates, viewCreates, docCreates *atomic.Int32) {
+// newFakeFeishu 启动假飞书（token/建 base/建表/建视图/建文档/记录搜索与新建/文档追加块）
+// 并把 PULSE_FEISHU_ENDPOINT 指过去，返回各类调用计数供断言；blockBodies 按调用序
+// 回放每次文档追加块请求的原始 JSON 体。
+func newFakeFeishu(t *testing.T) (appCreates, tableCreates, viewCreates, docCreates, blockAppends *atomic.Int32, blockBodies func() []string) {
 	t.Helper()
-	var appN, tableN, viewN, docN atomic.Int32
+	var appN, tableN, viewN, docN, blockN atomic.Int32
+	var mu sync.Mutex
+	var bodies []string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/open-apis/auth/v3/tenant_access_token/internal", func(w http.ResponseWriter, r *http.Request) {
 		respJSON(w, http.StatusOK, map[string]any{"code": 0, "tenant_access_token": "t-1", "expire": 7200})
@@ -59,21 +66,26 @@ func newFakeFeishu(t *testing.T) (appCreates, tableCreates, viewCreates, docCrea
 		}})
 	})
 	mux.HandleFunc("/open-apis/bitable/v1/apps/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/views") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/records/search"):
+			respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"items": []any{}}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/records"):
+			respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{
+				"record": map[string]any{"record_id": "recC"},
+			}})
+		case strings.HasSuffix(r.URL.Path, "/views"):
 			viewN.Add(1)
 			respJSON(w, http.StatusOK, map[string]any{"code": 0})
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/tables") {
+		case strings.HasSuffix(r.URL.Path, "/tables"):
 			n := tableN.Add(1)
 			id := "tblTask"
 			if n == 2 {
 				id = "tblVer"
 			}
 			respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"table_id": id}})
-			return
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 	})
 	mux.HandleFunc("/open-apis/docx/v1/documents", func(w http.ResponseWriter, r *http.Request) {
 		docN.Add(1)
@@ -81,10 +93,27 @@ func newFakeFeishu(t *testing.T) (appCreates, tableCreates, viewCreates, docCrea
 			"document": map[string]any{"document_id": "docD"},
 		}})
 	})
+	mux.HandleFunc("/open-apis/docx/v1/documents/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/children") {
+			http.NotFound(w, r)
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		mu.Lock()
+		bodies = append(bodies, string(raw))
+		mu.Unlock()
+		blockN.Add(1)
+		respJSON(w, http.StatusOK, map[string]any{"code": 0})
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	t.Setenv("PULSE_FEISHU_ENDPOINT", srv.URL)
-	return &appN, &tableN, &viewN, &docN
+	return &appN, &tableN, &viewN, &docN, &blockN,
+		func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), bodies...) }
 }
 
 // TestFeishuBindRequiresConfig：未配置飞书凭据时给中文引导错误，不产生任何写库。
@@ -118,7 +147,7 @@ func TestFeishuBindCreatesBaseEndToEnd(t *testing.T) {
 	if _, err := s.CreateProject("demo", "演示", ""); err != nil {
 		t.Fatal(err)
 	}
-	appN, tableN, viewN, docN := newFakeFeishu(t)
+	appN, tableN, viewN, docN, _, _ := newFakeFeishu(t)
 
 	out, errOut, err := runCLI(t, "feishu", "bind", "--project", "demo")
 	if err != nil {
@@ -174,7 +203,7 @@ func TestFeishuBindAdoptExistingBase(t *testing.T) {
 	if _, err := s.CreateProject("demo", "演示", ""); err != nil {
 		t.Fatal(err)
 	}
-	appN, tableN, viewN, docN := newFakeFeishu(t) // 服务在但不应被调用，计数 0 即证明采用模式零调用
+	appN, tableN, viewN, docN, _, _ := newFakeFeishu(t) // 服务在但不应被调用，计数 0 即证明采用模式零调用
 
 	// 缺 --task-table：报错且不写库
 	_, errOut, err := runCLI(t, "feishu", "bind", "--project", "demo", "--app-token", "appX")
@@ -207,4 +236,97 @@ func TestFeishuBindAdoptExistingBase(t *testing.T) {
 		t.Fatalf("采用 token 未写回: %+v", p)
 	}
 	requireActivity(t, s, p.ID, "feishu_bind", "project", "tester")
+}
+
+// TestFeishuPublishEndToEnd：bind 后 `pulse feishu publish` 完整走通——先静默同步
+// （记录搜索/新建打假飞书），再把报表块追加到绑定文档；输出文档 token 并落
+// feishu_publish 活动；all = weekly + versions 两次追加；非法 report 名报中文错误。
+func TestFeishuPublishEndToEnd(t *testing.T) {
+	s, _ := feishuTestEnv(t)
+	if _, err := s.CreateProject("demo", "演示", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, docN, blockN, bodies := newFakeFeishu(t)
+
+	if _, _, err := runCLI(t, "feishu", "bind", "--project", "demo"); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	p, found, err := s.GetProjectByKey("demo")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	tester, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateVersion(model.Version{ProjectID: p.ID, Name: "v1.0", Status: "planned"}, tester, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateTask(model.Task{ProjectID: p.ID, Title: "写发布说明", Status: "todo"}, tester, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// weekly：一次追加，块体含防混淆标题与落款
+	out, errOut, err := runCLI(t, "feishu", "publish", "--project", "demo", "--report", "weekly")
+	if err != nil {
+		t.Fatalf("publish weekly: %v stderr=%s", err, errOut)
+	}
+	for _, want := range []string{"已沉淀", "docD", "weekly", "tester"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout %q must contain %q", out, want)
+		}
+	}
+	if n := docN.Load(); n != 1 {
+		t.Fatalf("已绑文档时不得新建文档, DocCreate 次数 = %d", n)
+	}
+	if n := blockN.Load(); n != 1 {
+		t.Fatalf("weekly 应追加 1 次块, got %d", n)
+	}
+	for _, want := range []string{"周报 2026-W", "由 tester 触发", "由 pulse 导出 · 触发人 tester"} {
+		if bs := bodies(); len(bs) != 1 || !strings.Contains(bs[0], want) {
+			t.Fatalf("追加块体 %v 必须含 %q", bs, want)
+		}
+	}
+	assertActivity(t, s, p.ID, "feishu_publish", "tester")
+
+	// all：weekly + versions 两次追加
+	if _, errOut, err := runCLI(t, "feishu", "publish", "--project", "demo", "--report", "all"); err != nil {
+		t.Fatalf("publish all: %v stderr=%s", err, errOut)
+	}
+	if n := blockN.Load(); n != 3 {
+		t.Fatalf("all 后累计追加 = %d, want 3（weekly 单独 1 次 + all 的 2 次）", n)
+	}
+
+	// 非法 report 名：中文报错且不产生任何追加
+	_, errOut, err = runCLI(t, "feishu", "publish", "--project", "demo", "--report", "daily")
+	if err == nil || !strings.Contains(errOut, "weekly|versions|all") {
+		t.Fatalf("非法 report 必须报错, err=%v stderr=%s", err, errOut)
+	}
+	if n := blockN.Load(); n != 3 {
+		t.Fatalf("非法 report 不应追加块, got %d", n)
+	}
+}
+
+// assertActivity 断言窗口内存在指定 action 的活动且触发人可解析到成员名
+// （publish 测试现场已有多条活动，不能用恰好一条的 requireActivity）。
+func assertActivity(t *testing.T, s *store.Store, projectID int64, action, actorName string) {
+	t.Helper()
+	acts, err := s.ActivitiesInWindow(projectID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := s.ListMembers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[int64]string{}
+	for _, m := range ms {
+		names[m.ID] = m.Name
+	}
+	for _, a := range acts {
+		if a.Action == action && names[a.ActorID] == actorName {
+			return
+		}
+	}
+	t.Fatalf("未找到 action=%s actor=%s 的活动: %+v", action, actorName, acts)
 }
