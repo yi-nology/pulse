@@ -22,7 +22,7 @@ type depDetail struct {
 }
 
 // AddDependency 为任务建立依赖（task 依赖 depends_on），与 add_dependency 活动
-// 同事务落库。自依赖、重复依赖、任务不存在、跨项目依赖均报错。
+// 同事务落库。自依赖、重复依赖、任务不存在、已软删（任一方）、跨项目依赖均报错。
 func (s *Store) AddDependency(taskID, dependsOnID int64, actor model.Member, behalf *model.Member) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -36,6 +36,9 @@ func (s *Store) AddDependency(taskID, dependsOnID int64, actor model.Member, beh
 	if err != nil {
 		return fmt.Errorf("load task id=%d: %w", taskID, err)
 	}
+	if task.Archived {
+		return fmt.Errorf("%w: id=%d", ErrTaskArchived, taskID)
+	}
 	if taskID == dependsOnID {
 		return fmt.Errorf("%w: id=%d", ErrSelfDependency, taskID)
 	}
@@ -45,6 +48,9 @@ func (s *Store) AddDependency(taskID, dependsOnID int64, actor model.Member, beh
 	}
 	if err != nil {
 		return fmt.Errorf("load task id=%d: %w", dependsOnID, err)
+	}
+	if dep.Archived {
+		return fmt.Errorf("%w: id=%d", ErrTaskArchived, dependsOnID)
 	}
 	if task.ProjectID != dep.ProjectID {
 		return fmt.Errorf("依赖双方必须属于同一项目: 任务 %d 在项目 %d，任务 %d 在项目 %d",

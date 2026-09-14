@@ -48,6 +48,10 @@ func newMCPCmd() *cobra.Command {
 			mcpserver.PublishReportFunc = func(st *store.Store, projectKey, report string) (any, error) {
 				return publishReportForMCP(st, cfg, projectKey, report)
 			}
+			// warnWriter 只在此一次性固定到 stderr：MCP 允许并发执行工具，任何工具回调里
+			// 再 SetWarnWriter 都会与另一工具的 autopush 写警告构成数据竞争（接口字无锁）。
+			// MCP 模式 stdout 归协议，stderr 本就是警告的唯一合法出口。
+			feishu.SetWarnWriter(os.Stderr)
 			return srv.Run(cmd.Context(), &mcp.StdioTransport{})
 		},
 	}
@@ -67,7 +71,6 @@ func publishReportForMCP(st *store.Store, cfg *config.Config, projectKey, report
 	if err != nil {
 		return nil, err
 	}
-	feishu.SetWarnWriter(os.Stderr) // MCP 模式 stdout 归协议，警告只能走 stderr
 	c := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, os.Getenv("PULSE_FEISHU_ENDPOINT"))
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
 	defer cancel()

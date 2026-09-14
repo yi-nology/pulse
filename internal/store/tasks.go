@@ -17,6 +17,11 @@ var validTaskStatuses = map[string]bool{
 	"backlog": true, "todo": true, "in_progress": true, "blocked": true, "done": true,
 }
 
+// ErrTaskArchived 表示任务已软删（archived=1），更新与建立依赖均被拒绝（errors.Is 判断）：
+// 软删行对所有列表/报告不可见，且 Sync 只向远端推送已废弃墓碑——放行编辑只会造成
+// 本地假成功、变更静默丢失，因此一律报错。
+var ErrTaskArchived = errors.New("任务已删除")
+
 // TaskFilter 任务列表过滤条件；零值字段表示"不过滤"。
 type TaskFilter struct {
 	AssigneeID      int64  // 0 = 不过滤
@@ -142,7 +147,8 @@ func (s *Store) CreateTask(t model.Task, actor model.Member, behalf *model.Membe
 //   - status 变更：done → 其他 记 action="reopen"，其余记 "update_status"，
 //     并刷新 status_changed_at；
 //   - 其他字段变更记 action="update"；
-//   - 任何变更刷新 updated_at；无变更（含同值写入）为 no-op，不刷新、不落活动。
+//   - 任何变更刷新 updated_at；无变更（含同值写入）为 no-op，不刷新、不落活动；
+//   - 已软删任务报 ErrTaskArchived 拒绝。
 func (s *Store) UpdateTask(id int64, ch TaskChanges, actor model.Member, behalf *model.Member) (model.Task, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -155,6 +161,9 @@ func (s *Store) UpdateTask(id int64, ch TaskChanges, actor model.Member, behalf 
 	}
 	if err != nil {
 		return model.Task{}, fmt.Errorf("load task id=%d: %w", id, err)
+	}
+	if old.Archived {
+		return model.Task{}, fmt.Errorf("%w: id=%d", ErrTaskArchived, id)
 	}
 
 	now := time.Now().UTC().Format(activitiesLayout)

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -228,6 +230,38 @@ func TestUpdateTaskNoopKeepsTimestampsAndActivity(t *testing.T) {
 	}
 	if acts := changeActivities(t, s, p.ID); len(acts) != 0 {
 		t.Fatalf("no-change update must not log activity: %+v", acts)
+	}
+}
+
+// TestUpdateTaskArchivedRejected 已软删任务对编辑只读：必须以 ErrTaskArchived 拒绝
+// （文案「任务已删除: id=N」），且拒绝即无副作用——内容不变、不落任何变更活动。
+func TestUpdateTaskArchivedRejected(t *testing.T) {
+	s := openTest(t)
+	p := seedProject(t, s)
+	actor := taskActor(t, s)
+	tk := seedTask(t, s, p.ID, actor, nil)
+	if err := s.SoftDeleteTask(tk.ID, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.UpdateTask(tk.ID, TaskChanges{Title: strptr("改标题")}, actor, nil)
+	if !errors.Is(err, ErrTaskArchived) {
+		t.Fatalf("update archived task must be ErrTaskArchived, got %v", err)
+	}
+	if want := fmt.Sprintf("任务已删除: id=%d", tk.ID); err.Error() != want {
+		t.Fatalf("error text %q must be %q", err.Error(), want)
+	}
+	got, found, err := s.GetTask(tk.ID)
+	if err != nil || !found {
+		t.Fatalf("GetTask: found=%v err=%v", found, err)
+	}
+	if got.Title != "任务" {
+		t.Fatalf("rejected update must leave task untouched, got %q", got.Title)
+	}
+	// 仅 archive 一条变更活动；被拒的 update 不得再落
+	acts := changeActivities(t, s, p.ID)
+	if len(acts) != 1 || acts[0].Action != "archive" {
+		t.Fatalf("rejected update must not log activity, got %+v", acts)
 	}
 }
 

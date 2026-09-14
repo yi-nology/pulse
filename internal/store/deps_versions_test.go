@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,6 +56,48 @@ func TestAddDependencyAndActivity(t *testing.T) {
 	want := `{"depends_on_task_id":` + strconv.FormatInt(t2.ID, 10) + `,"type":"FS"}`
 	if a.Detail != want {
 		t.Fatalf("detail %q must be %q", a.Detail, want)
+	}
+}
+
+// TestAddDependencyArchivedRejected 已软删任务不能作为依赖的任一方：必须以
+// ErrTaskArchived 拒绝（文案「任务已删除: id=N」），不落依赖、不落活动。
+func TestAddDependencyArchivedRejected(t *testing.T) {
+	s := openTest(t)
+	p := seedProject(t, s)
+	actor := taskActor(t, s)
+	t1 := seedTask(t, s, p.ID, actor, nil)
+	t2 := seedTask(t, s, p.ID, actor, nil)
+	t3 := seedTask(t, s, p.ID, actor, nil)
+	if err := s.SoftDeleteTask(t1.ID, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SoftDeleteTask(t2.ID, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// 依赖发起方已归档
+	err := s.AddDependency(t1.ID, t3.ID, actor, nil)
+	if !errors.Is(err, ErrTaskArchived) {
+		t.Fatalf("dep from archived task must be ErrTaskArchived, got %v", err)
+	}
+	if want := fmt.Sprintf("任务已删除: id=%d", t1.ID); err.Error() != want {
+		t.Fatalf("error text %q must be %q", err.Error(), want)
+	}
+	// 依赖目标已归档
+	err = s.AddDependency(t3.ID, t2.ID, actor, nil)
+	if !errors.Is(err, ErrTaskArchived) {
+		t.Fatalf("dep onto archived task must be ErrTaskArchived, got %v", err)
+	}
+	if want := fmt.Sprintf("任务已删除: id=%d", t2.ID); err.Error() != want {
+		t.Fatalf("error text %q must be %q", err.Error(), want)
+	}
+	if deps, err := s.ListDependencies(p.ID); err != nil || len(deps) != 0 {
+		t.Fatalf("rejected deps must not persist: %+v err=%v", deps, err)
+	}
+	// 仅两条 archive 活动；被拒的 add_dependency 不得再落
+	acts := changeActivities(t, s, p.ID)
+	if len(acts) != 2 {
+		t.Fatalf("rejected deps must not log activity, got %+v", acts)
 	}
 }
 

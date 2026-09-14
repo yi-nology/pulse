@@ -553,6 +553,26 @@ func TestToolDescriptions(t *testing.T) {
 	}
 }
 
+// TestUpdateArchivedTaskRejected 已软删任务对 update_task 只读：工具必须以 isError
+// 报「任务已删除」，不得给持有过期 id 的代理返回虚假成功（否则编辑永远不进共享表）。
+func TestUpdateArchivedTaskRejected(t *testing.T) {
+	s := testEnv(t)
+	requireProject(t, s, "demo")
+	sc := connect(t, s, "claude")
+
+	created := decode(t, callTool(t, sc, "add_task", map[string]any{"project": "demo", "title": "t1"}))
+	id := int64(created["ID"].(float64))
+	agent := memberByName(t, s, "claude")
+	if err := s.SoftDeleteTask(id, agent, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := callToolErr(t, sc, "update_task", map[string]any{"id": id, "status": "done"})
+	if !strings.Contains(msg, "任务已删除") {
+		t.Fatalf("update_task on archived id must be rejected with 任务已删除: %s", msg)
+	}
+}
+
 // TestMissingRequired 缺必填参数走 isError（SDK schema 校验或本包校验），不炸协议。
 func TestMissingRequired(t *testing.T) {
 	s := testEnv(t)
