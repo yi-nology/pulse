@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{{.Title}}</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:24px auto;max-width:1080px;color:#1f2328;font-size:14px;line-height:1.5}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:18px 0 8px;border-bottom:1px solid #d0d7de;padding-bottom:4px}
+h3{font-size:13px;margin:14px 0 6px}
+.muted{color:#656d76;font-size:12px}
+.ver{margin-bottom:18px}
+.totalbar{width:100%;height:10px;background:#eaeef2;border-radius:5px;overflow:hidden;margin:8px 0}
+.donefill{height:100%;background:#1a7f37}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{border:1px solid #d0d7de;padding:6px 10px;text-align:left}
+th{background:#f6f8fa}
+tr.overdue td{background:#fff8f5}
+ul{margin:4px 0;padding-left:20px}
+</style>
+</head>
+<body>
+<h1>{{.Title}}</h1>
+{{if .HasVersion}}
+{{range .Versions}}
+<div class="ver">
+<h2>{{.Name}} <span class="muted">状态 {{.Status}}{{if .TargetDate}} · 目标 {{.TargetDate}}{{else}} · 目标未定{{end}}</span></h2>
+<p>完成度 {{.Done}}/{{.Total}}（{{.DonePctText}}）· 逾期 {{.OverdueN}} 项 · 风险摘要：{{.RiskSummary}}</p>
+<div class="totalbar"><div class="donefill" style="width:{{.DonePct}}%"></div></div>
+{{if .Tasks}}
+<table>
+<thead>
+<tr><th>ID</th><th>标题</th><th>负责人</th><th>状态</th><th>截止</th><th>预估（人日）</th></tr>
+</thead>
+<tbody>
+{{range .Tasks}}
+<tr{{if .IsOverdue}} class="overdue"{{end}}>
+  <td>{{.ID}}</td>
+  <td>{{.Title}}</td>
+  <td>{{if .Assignee}}{{.Assignee}}{{else}}<span class="muted">未指定</span>{{end}}</td>
+  <td>{{.Status}}</td>
+  <td>{{.Due}}</td>
+  <td>{{.Estimate}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">该版本暂无任务。</p>
+{{end}}
+{{if .RiskLines}}
+<h3>风险明细</h3>
+<ul>
+{{range .RiskLines}}<li>{{.}}</li>{{end}}
+</ul>
+{{end}}
+</div>
+{{end}}
+{{else}}
+<p>暂无版本：先用 pulse version add 创建版本，任务绑定版本后即可看到 scope 与完成度。</p>
+{{end}}
+{{if .OtherRisks}}
+<h2>其他风险</h2>
+<ul>
+{{range .OtherRisks}}<li>{{.}}</li>{{end}}
+</ul>
+{{end}}
+</body>
+</html>

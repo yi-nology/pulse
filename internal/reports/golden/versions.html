@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>版本规划 · demo</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:24px auto;max-width:1080px;color:#1f2328;font-size:14px;line-height:1.5}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:18px 0 8px;border-bottom:1px solid #d0d7de;padding-bottom:4px}
+h3{font-size:13px;margin:14px 0 6px}
+.muted{color:#656d76;font-size:12px}
+.ver{margin-bottom:18px}
+.totalbar{width:100%;height:10px;background:#eaeef2;border-radius:5px;overflow:hidden;margin:8px 0}
+.donefill{height:100%;background:#1a7f37}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{border:1px solid #d0d7de;padding:6px 10px;text-align:left}
+th{background:#f6f8fa}
+tr.overdue td{background:#fff8f5}
+ul{margin:4px 0;padding-left:20px}
+</style>
+</head>
+<body>
+<h1>版本规划 · demo</h1>
+
+
+<div class="ver">
+<h2>v1.0 <span class="muted">状态 in_dev · 目标 2026-09-30</span></h2>
+<p>完成度 1/5（20%）· 逾期 0 项 · 风险摘要：未指定负责人 1 · 依赖倒置 1</p>
+<div class="totalbar"><div class="donefill" style="width:20.00%"></div></div>
+
+<table>
+<thead>
+<tr><th>ID</th><th>标题</th><th>负责人</th><th>状态</th><th>截止</th><th>预估（人日）</th></tr>
+</thead>
+<tbody>
+
+<tr>
+  <td>1</td>
+  <td>搭建骨架</td>
+  <td>alice</td>
+  <td>done</td>
+  <td>2026-09-10</td>
+  <td>3.0</td>
+</tr>
+
+<tr>
+  <td>2</td>
+  <td>登录接口</td>
+  <td>alice</td>
+  <td>in_progress</td>
+  <td>2026-09-20</td>
+  <td>3.0</td>
+</tr>
+
+<tr>
+  <td>3</td>
+  <td>依赖倒置示例</td>
+  <td>bob</td>
+  <td>todo</td>
+  <td>2026-09-18</td>
+  <td>2.0</td>
+</tr>
+
+<tr>
+  <td>5</td>
+  <td>环境准备</td>
+  <td><span class="muted">未指定</span></td>
+  <td>todo</td>
+  <td>2026-09-25</td>
+  <td>2.0</td>
+</tr>
+
+<tr>
+  <td>7</td>
+  <td>修复登录超时</td>
+  <td>bob</td>
+  <td>in_progress</td>
+  <td>2026-09-16</td>
+  <td>1.0</td>
+</tr>
+
+</tbody>
+</table>
+
+
+<h3>风险明细</h3>
+<ul>
+<li>[medium] #5 环境准备 未指定负责人</li><li>[medium] #3 依赖倒置示例 依赖倒置</li>
+</ul>
+
+</div>
+
+<div class="ver">
+<h2>v2.0 <span class="muted">状态 planned · 目标 2026-10-15</span></h2>
+<p>完成度 0/3（0%）· 逾期 1 项 · 风险摘要：逾期 1 · 未指定负责人 1</p>
+<div class="totalbar"><div class="donefill" style="width:0.00%"></div></div>
+
+<table>
+<thead>
+<tr><th>ID</th><th>标题</th><th>负责人</th><th>状态</th><th>截止</th><th>预估（人日）</th></tr>
+</thead>
+<tbody>
+
+<tr>
+  <td>4</td>
+  <td>接口文档</td>
+  <td>bob</td>
+  <td>todo</td>
+  <td>2026-09-25</td>
+  <td>1.0</td>
+</tr>
+
+<tr>
+  <td>6</td>
+  <td>数据迁移</td>
+  <td><span class="muted">未指定</span></td>
+  <td>todo</td>
+  <td></td>
+  <td>0.0</td>
+</tr>
+
+<tr class="overdue">
+  <td>8</td>
+  <td>历史欠账</td>
+  <td>bob</td>
+  <td>todo</td>
+  <td>2026-09-05</td>
+  <td>2.0</td>
+</tr>
+
+</tbody>
+</table>
+
+
+<h3>风险明细</h3>
+<ul>
+<li>[medium] #6 数据迁移 未指定负责人</li><li>[high] #8 历史欠账 逾期 10 天</li>
+</ul>
+
+</div>
+
+
+
+<h2>其他风险</h2>
+<ul>
+<li>[high] bob 负载率 200%</li>
+</ul>
+
+</body>
+</html>

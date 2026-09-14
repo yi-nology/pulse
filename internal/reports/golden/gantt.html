@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>甘特图 · demo</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:24px auto;max-width:1080px;color:#1f2328;font-size:14px;line-height:1.5}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:18px 0 8px;border-bottom:1px solid #d0d7de;padding-bottom:4px}
+.muted{color:#656d76;font-size:12px}
+.lane{border:1px solid #d0d7de;border-radius:6px;padding:8px 16px 14px;margin-bottom:14px}
+.row{position:relative;height:30px}
+.row.hasdeps{height:50px}
+.bar{position:absolute;top:5px;height:20px;border-radius:4px;min-width:2px;background:#57606a}
+.bar.doing{background:#0969da}
+.bar.done{background:#1a7f37}
+.bar.blocked{background:#cf222e}
+.bar .label{position:absolute;left:6px;top:2px;font-size:12px;color:#fff;white-space:nowrap}
+.deps{position:absolute;top:28px;font-size:11px;color:#656d76;white-space:nowrap}
+.legend{margin:6px 0 14px}
+.legend span{margin-right:16px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.dot.doing{background:#0969da}
+.dot.done{background:#1a7f37}
+.dot.blocked{background:#cf222e}
+.dot.other{background:#57606a}
+.risk{border:1px solid #d0d7de;border-radius:6px;padding:10px 16px}
+.risk p{margin:4px 0}
+.risk ul{margin:6px 0 2px;padding-left:20px}
+</style>
+</head>
+<body>
+<h1>甘特图 · demo</h1>
+<p class="muted">2026-09-01 ~ 2026-09-20 · 任务条 4 条 · 依赖箭头省略，以条下文字标注</p>
+<div class="legend muted">
+  <span><i class="dot done"></i>done</span>
+  <span><i class="dot doing"></i>in_progress</span>
+  <span><i class="dot blocked"></i>blocked</span>
+  <span><i class="dot other"></i>其他</span>
+</div>
+
+
+<div class="lane">
+  <h2>v1.0 <span class="muted">目标 2026-09-30 · in_dev</span></h2>
+  
+  <div class="row">
+    <div class="bar done" style="left:0.00%;width:50.00%"><span class="label">#1 搭建骨架</span></div>
+    
+  </div>
+  
+  <div class="row">
+    <div class="bar doing" style="left:35.00%;width:65.00%"><span class="label">#2 登录接口</span></div>
+    
+  </div>
+  
+  <div class="row hasdeps">
+    <div class="bar" style="left:45.00%;width:45.00%"><span class="label">#3 依赖倒置示例</span></div>
+    <div class="deps" style="left:45.00%">依赖 #5</div>
+  </div>
+  
+  <div class="row">
+    <div class="bar doing" style="left:55.00%;width:25.00%"><span class="label">#7 修复登录超时</span></div>
+    
+  </div>
+  
+</div>
+
+
+<h2>风险区</h2>
+<div class="risk">
+
+  <p>未排期任务 4 个</p>
+  <ul>
+  <li>#4 接口文档</li><li>#5 环境准备</li><li>#6 数据迁移</li><li>#8 历史欠账</li>
+  </ul>
+
+</div>
+</body>
+</html>

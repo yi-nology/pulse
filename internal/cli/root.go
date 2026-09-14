@@ -26,6 +26,7 @@ func newRootCmd() *cobra.Command {
 		newMemberCmd(),
 		newTaskCmd(),
 		newVersionCmd(),
+		newReportCmd(),
 	)
 	return root
 }

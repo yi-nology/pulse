@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>人力负载 · demo</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:24px auto;max-width:1080px;color:#1f2328;font-size:14px;line-height:1.5}
+h1{font-size:20px;margin:0 0 4px}
+.muted{color:#656d76;font-size:12px}
+table{border-collapse:collapse;width:100%;margin-top:14px}
+th,td{border:1px solid #d0d7de;padding:6px 10px;text-align:left;vertical-align:top}
+th{background:#f6f8fa}
+tr.over td{background:#fff8f5}
+.ratebar{display:inline-block;width:120px;height:10px;background:#eaeef2;border-radius:5px;overflow:hidden;vertical-align:middle;margin-right:8px}
+.ratefill{height:100%;background:#0969da}
+.ratefill.over{background:#cf222e}
+.ratetext.over{color:#cf222e;font-weight:600}
+td.detail{background:#f6f8fa;font-size:13px}
+td.detail ul{margin:4px 0;padding-left:20px}
+</style>
+</head>
+<body>
+<h1>人力负载 · demo</h1>
+<p class="muted">口径：未来 14 天（2026-09-15 ~ 2026-09-29）内到期且未完成任务的预估人日合计 ÷（周容量 × 2）；负载率 &gt; 100% 标红。</p>
+
+<table>
+<thead>
+<tr><th>成员</th><th>类型</th><th>负载（人日）</th><th>容量（人日）</th><th>负载率</th></tr>
+</thead>
+<tbody>
+
+<tr>
+  <td>alice</td>
+  <td>human</td>
+  <td>3.0</td>
+  <td>10.0</td>
+  <td><span class="ratebar"><span class="ratefill" style="display:inline-block;width:30.00%;height:100%"></span></span><span class="ratetext">30%</span></td>
+</tr>
+<tr><td class="detail" colspan="5">
+  
+  计入负载：
+  <ul>
+  <li>#2 登录接口（due 2026-09-20，3.0 人日）</li>
+  </ul>
+  
+</td></tr>
+
+<tr class="over">
+  <td>bob</td>
+  <td>human</td>
+  <td>4.0</td>
+  <td>2.0</td>
+  <td><span class="ratebar"><span class="ratefill over" style="display:inline-block;width:100.00%;height:100%"></span></span><span class="ratetext over">200%</span></td>
+</tr>
+<tr><td class="detail" colspan="5">
+  
+  计入负载：
+  <ul>
+  <li>#3 依赖倒置示例（due 2026-09-18，2.0 人日）</li><li>#4 接口文档（due 2026-09-25，1.0 人日）</li><li>#7 修复登录超时（due 2026-09-16，1.0 人日）</li>
+  </ul>
+  
+</td></tr>
+
+</tbody>
+</table>
+
+</body>
+</html>
