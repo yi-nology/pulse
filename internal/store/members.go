@@ -26,6 +26,18 @@ func (s *Store) GetOrCreateMember(name, typ string) (model.Member, error) {
 	return m, nil
 }
 
+// SetMemberCapacity 更新成员每周可投入人日；成员不存在时报错。
+func (s *Store) SetMemberCapacity(id int64, capacity float64) error {
+	res, err := s.db.Exec(`UPDATE members SET capacity_days_per_week = ? WHERE id = ?`, capacity, id)
+	if err != nil {
+		return fmt.Errorf("set member capacity id=%d: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("set member capacity: 成员不存在 id=%d", id)
+	}
+	return nil
+}
+
 // ListMembers 返回全部成员（按 id 升序）。
 func (s *Store) ListMembers() ([]model.Member, error) {
 	rows, err := s.db.Query(

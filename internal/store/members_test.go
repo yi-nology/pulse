@@ -22,6 +22,24 @@ func TestGetOrCreateMemberIdempotent(t *testing.T) {
 	}
 }
 
+func TestSetMemberCapacity(t *testing.T) {
+	s := openTest(t)
+	m, err := s.GetOrCreateMember("alice", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMemberCapacity(m.ID, 3); err != nil {
+		t.Fatal(err)
+	}
+	ms, err := s.ListMembers()
+	if err != nil || len(ms) != 1 || ms[0].Capacity != 3 {
+		t.Fatalf("capacity not updated: %v %v", ms, err)
+	}
+	if err := s.SetMemberCapacity(999, 3); err == nil {
+		t.Fatal("nonexistent member must error")
+	}
+}
+
 func TestActivityWindow(t *testing.T) {
 	s := openTest(t)
 	// activity.project_id 外键引用 projects(id)（Open 开启了 foreign_keys），
