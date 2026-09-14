@@ -103,6 +103,7 @@ func newTaskDepCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "依赖已添加: 任务 %d 依赖任务 %d\n", id, onID)
+			autopushForTask(cmd, s, cfg, id) // 写后自动 push（尽力而为）
 			return nil
 		},
 	}
@@ -167,6 +168,7 @@ func newTaskAddCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "任务已创建: %s (id=%d)\n", tk.Title, tk.ID)
+			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
 	}
@@ -323,6 +325,7 @@ func newTaskUpdateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "任务已更新: %s (id=%d)\n", tk.Title, tk.ID)
+			autopushForTask(cmd, s, cfg, id) // 写后自动 push（尽力而为）
 			return nil
 		},
 	}
@@ -369,6 +372,7 @@ func newTaskRmCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "任务已删除: %s (id=%d)\n", old.Title, old.ID)
+			autopushForTask(cmd, s, cfg, id) // 写后自动 push 软删墓碑（尽力而为）
 			return nil
 		},
 	}

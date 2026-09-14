@@ -10,8 +10,12 @@ import (
 	"github.com/zhangyi/pulse/internal/store"
 )
 
-// warnWriter 输出非致命警告（如甘特视图创建失败）；包级变量便于测试注入捕获。
+// warnWriter 输出非致命警告（如甘特视图创建失败、自动同步失败）；包级变量便于测试注入捕获。
 var warnWriter io.Writer = os.Stderr
+
+// SetWarnWriter 更换包级警告输出目标；CLI 接线时把警告导向当前命令的 stderr，
+// 使"写命令失败仅警告"的文案可被捕获与断言。
+func SetWarnWriter(w io.Writer) { warnWriter = w }
 
 // 飞书多维表格字段类型编号（api.go Field.Type）。
 const (

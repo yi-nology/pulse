@@ -61,6 +61,7 @@ func newVersionAddCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "版本已创建: %s (id=%d)\n", v.Name, v.ID)
+			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
 	}
@@ -143,6 +144,7 @@ func newVersionUpdateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "版本已更新: %s (id=%d)\n", v.Name, v.ID)
+			autopushForVersion(cmd, s, cfg, id) // 写后自动 push（尽力而为）
 			return nil
 		},
 	}

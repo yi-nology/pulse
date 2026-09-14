@@ -18,11 +18,21 @@ type callRec struct {
 	fields []Field // 仅 TableCreate 使用
 }
 
-// fakeAPI 是 bind 的测试替身：按序记录调用，可注入失败；仅实现 bitableAPI。
+// fakeAPI 是 bind/sync 的测试替身：按序记录调用、可按表脚本化 RecordSearch 结果、
+// 依次回放 RecordCreate 的 record_id、捕获写入的 fields、可注入失败；仅实现 bitableAPI。
 type fakeAPI struct {
 	calls   []callRec
 	appErr  error // AppCreate 注入失败
 	viewErr error // ViewCreate 注入失败（bind 应仅警告不中断）
+
+	// —— sync 测试扩展 ————————————————————————————————
+	searchByTable map[string][]Record // RecordSearch 按 tableID 返回脚本（缺省空）
+	searchErr     error               // RecordSearch 注入失败
+	createIDs     map[string][]string // RecordCreate 按 tableID 依次回放的 record_id（缺省 rec1）
+	createErr     error               // RecordCreate 注入失败
+	updateErr     error               // RecordUpdate 注入失败
+	createdFields []map[string]any    // 每次 RecordCreate 收到的 fields（按调用序）
+	updatedFields []map[string]any    // 每次 RecordUpdate 收到的 fields（按调用序）
 }
 
 func (f *fakeAPI) record(method string, args ...string) {
@@ -54,16 +64,31 @@ func (f *fakeAPI) ViewCreate(ctx context.Context, appToken, tableID, name, viewT
 
 func (f *fakeAPI) RecordSearch(ctx context.Context, appToken, tableID string) ([]Record, error) {
 	f.record("RecordSearch", appToken, tableID)
-	return nil, nil
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
+	return f.searchByTable[tableID], nil
 }
 
 func (f *fakeAPI) RecordCreate(ctx context.Context, appToken, tableID string, fields map[string]any) (string, error) {
 	f.record("RecordCreate", appToken, tableID)
+	if f.createErr != nil {
+		return "", f.createErr
+	}
+	f.createdFields = append(f.createdFields, fields)
+	if ids := f.createIDs[tableID]; len(ids) > 0 {
+		f.createIDs[tableID] = ids[1:]
+		return ids[0], nil
+	}
 	return "rec1", nil
 }
 
 func (f *fakeAPI) RecordUpdate(ctx context.Context, appToken, tableID, recordID string, fields map[string]any) error {
 	f.record("RecordUpdate", appToken, tableID, recordID)
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updatedFields = append(f.updatedFields, fields)
 	return nil
 }
 

@@ -40,13 +40,15 @@ func newReportCmd() *cobra.Command {
 }
 
 // newReportKindCmd 组装单个报表子命令：--project 必填，--out 缺省 stdout。
+// 生成前做 stale 检查（已配置飞书且超过 sync.stale_minutes 未 pull → 先静默同步，
+// 失败仅提示数据可能滞后，不影响报表输出）。
 func newReportKindCmd(kind, short string, gen func(*store.Store, int64, time.Time) ([]byte, error)) *cobra.Command {
 	var projectKey, out string
 	cmd := &cobra.Command{
 		Use:   kind,
 		Short: short,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, _, err := openApp()
+			s, cfg, err := openApp()
 			if err != nil {
 				return err
 			}
@@ -55,6 +57,11 @@ func newReportKindCmd(kind, short string, gen func(*store.Store, int64, time.Tim
 			if err != nil {
 				return err
 			}
+			a, _, err := resolveActor(s, cfg, cmd)
+			if err != nil {
+				return err
+			}
+			pullIfStale(s, cfg, p, a, cmd.ErrOrStderr())
 			data, err := gen(s, p.ID, time.Now())
 			if err != nil {
 				return err
