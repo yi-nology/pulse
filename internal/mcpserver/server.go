@@ -46,6 +46,12 @@ const serverVersion = "dev"
 // 返回值将作为 JSON 结果回给代理。nil 时 publish_feishu 返回引导错误文本。
 var PublishReportFunc func(st *store.Store, projectKey, report string) (any, error)
 
+// AutopushFunc 是写工具成功后的自动同步注入点（与 PublishReportFunc 同模式，
+// 保持 mcpserver 零飞书依赖）：由 cli/mcp.go 装配为 feishu.BestEffort。
+// 实现方必须遵守 autopush 契约：未配置/未绑定时静默、失败仅写 stderr 警告、
+// 绝不向上返回错误（工具结果不受影响）。nil 时写工具不做任何同步。
+var AutopushFunc func(st *store.Store, projectKey string)
+
 // New 组装 pulse MCP server。default_actor 经 config.Load(config.DefaultPath())
 // 读取一次（PULSE_HOME 可重定向），供 delegated_by 的 behalf 解析使用；
 // 配置读取失败必须中止启动，因此返回 error。
@@ -113,6 +119,30 @@ func (c *core) project(key string) (model.Project, error) {
 		return model.Project{}, fmt.Errorf("项目不存在: %s", key)
 	}
 	return p, nil
+}
+
+// autopushKey 写工具成功后的尽力同步（按项目 key）；未装配或解析不到项目时静默。
+func (c *core) autopushKey(projectKey string) {
+	if AutopushFunc != nil && projectKey != "" {
+		AutopushFunc(c.st, projectKey)
+	}
+}
+
+// autopushProject 写工具成功后的尽力同步（只有实体 ID 的工具经此按项目 ID 反查 key）。
+func (c *core) autopushProject(projectID int64) {
+	if AutopushFunc == nil {
+		return
+	}
+	ps, err := c.st.ListProjects()
+	if err != nil {
+		return
+	}
+	for _, p := range ps {
+		if p.ID == projectID {
+			AutopushFunc(c.st, p.Key)
+			return
+		}
+	}
 }
 
 // jsonText 统一结果序列化：两空格缩进 JSON 文本作为唯一 content。
@@ -456,6 +486,7 @@ func (c *core) addTask(_ context.Context, _ *mcp.CallToolRequest, in addTaskIn) 
 	if err != nil {
 		return nil, nil, err
 	}
+	c.autopushKey(p.Key) // 写后自动 push（尽力而为，失败仅警告，不影响工具结果）
 	return c.singleTaskView(created)
 }
 
@@ -524,6 +555,7 @@ func (c *core) updateTask(_ context.Context, _ *mcp.CallToolRequest, in updateTa
 	if err != nil {
 		return nil, nil, err
 	}
+	c.autopushProject(updated.ProjectID) // 写后自动 push（尽力而为）
 	return c.singleTaskView(updated)
 }
 
@@ -534,6 +566,9 @@ func (c *core) addDependency(_ context.Context, _ *mcp.CallToolRequest, in addDe
 	}
 	if err := c.st.AddDependency(in.TaskID, in.DependsOnTaskID, a, behalf); err != nil {
 		return nil, nil, err
+	}
+	if t, found, err := c.st.GetTask(in.TaskID); err == nil && found {
+		c.autopushProject(t.ProjectID) // 写后自动 push（尽力而为）
 	}
 	return jsonText(map[string]any{
 		"ok": true, "task_id": in.TaskID, "depends_on_task_id": in.DependsOnTaskID, "type": "FS",
@@ -581,6 +616,7 @@ func (c *core) addVersion(_ context.Context, _ *mcp.CallToolRequest, in addVersi
 	if err != nil {
 		return nil, nil, err
 	}
+	c.autopushKey(p.Key) // 写后自动 push（尽力而为，失败仅警告，不影响工具结果）
 	return jsonText(v)
 }
 
@@ -611,6 +647,7 @@ func (c *core) updateVersion(_ context.Context, _ *mcp.CallToolRequest, in updat
 	if err != nil {
 		return nil, nil, err
 	}
+	c.autopushProject(v.ProjectID) // 写后自动 push（尽力而为）
 	return jsonText(v)
 }
 

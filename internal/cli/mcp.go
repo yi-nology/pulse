@@ -7,7 +7,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 
+	"github.com/zhangyi/pulse/internal/feishu"
 	"github.com/zhangyi/pulse/internal/mcpserver"
+	"github.com/zhangyi/pulse/internal/store"
 )
 
 // newMCPCmd 实现 `pulse mcp`：以 stdio 传输运行 MCP server，供编码代理接入。
@@ -22,7 +24,7 @@ func newMCPCmd() *cobra.Command {
 			if agentName == "" {
 				return errors.New("启动 MCP server 需设置 PULSE_ACTOR")
 			}
-			s, _, err := openApp()
+			s, cfg, err := openApp()
 			if err != nil {
 				return err
 			}
@@ -31,7 +33,12 @@ func newMCPCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// 装配点：Task 13 实现 internal/feishu 后在此注入 mcpserver.PublishReportFunc。
+			// 装配点：写工具成功后的自动 push（与 CLI 写命令同一 BestEffort 契约：
+			// 未配置/未绑定静默、失败仅 stderr 警告、绝不影响工具结果）。
+			mcpserver.AutopushFunc = func(st *store.Store, projectKey string) {
+				feishu.BestEffort(st, cfg, projectKey)
+			}
+			// Task 13 实现 internal/feishu 的 PublishReport 后在此注入 mcpserver.PublishReportFunc。
 			return srv.Run(cmd.Context(), &mcp.StdioTransport{})
 		},
 	}

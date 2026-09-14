@@ -18,7 +18,8 @@ import (
 const autopushTimeout = 30 * time.Second
 
 // BestEffort 在写命令成功后自动 push：未配置凭据、项目不存在或未绑定 base 时静默返回；
-// 同步失败仅向 stderr 输出警告（本地变更已保留，恢复后 pulse sync 可补推）。
+// 同步失败仅向 warnWriter 输出警告（本地变更已保留，恢复后 pulse sync 可补推）；
+// 同步成功但存在非致命告警（如缺字段跳过、单行合入失败）时同样逐条输出，保证可见。
 func BestEffort(s *store.Store, cfg *config.Config, projectKey string) {
 	if cfg == nil || cfg.Feishu.AppID == "" || cfg.Feishu.AppSecret == "" {
 		return // 未配置飞书：静默
@@ -38,8 +39,13 @@ func BestEffort(s *store.Store, cfg *config.Config, projectKey string) {
 	c := NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, os.Getenv("PULSE_FEISHU_ENDPOINT"))
 	ctx, cancel := context.WithTimeout(context.Background(), autopushTimeout)
 	defer cancel()
-	if _, err := SyncProject(ctx, c, s, p, a); err != nil {
+	res, err := SyncProject(ctx, c, s, p, a)
+	if err != nil {
 		warnAutopush(err)
+		return
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintf(warnWriter, "警告: %s\n", w)
 	}
 }
 

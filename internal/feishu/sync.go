@@ -44,6 +44,22 @@ func lastPullKey(projectID int64) string {
 // LastPullKey 导出 last_pull 键名约定，供 CLI 报表 stale 检查读取。
 func LastPullKey(projectID int64) string { return lastPullKey(projectID) }
 
+// pendingRecordKey 是"远端记录已建、本地回填尚未完成"的过渡态键：RecordCreate 成功后
+// 先把取得的 record_id 记到这里再回填行内元数据；回填因任何原因中断时，下一轮 push
+// 与 pull 都依据它复用同一条远端记录，保证重跑幂等（不在远端/本地产生重复行）。
+func pendingRecordKey(entity string, id int64) string {
+	return fmt.Sprintf("pending_record:%s:%d", entity, id)
+}
+
+// capWatermark 把本轮水位上限压到最早失败记录之前：失败记录的合入下轮必须重试
+// （成功合入的记录重处理时会被回声判定跳过，代价可忽略）。
+func capWatermark(maxLMT, minFailedLMT int64) int64 {
+	if minFailedLMT > 0 && minFailedLMT-1 < maxLMT {
+		return minFailedLMT - 1
+	}
+	return maxLMT
+}
+
 // GetSyncState 读取 sync_state（store 同名方法的包内封装）。
 func GetSyncState(s *store.Store, key string) (string, bool, error) { return s.GetSyncState(key) }
 
@@ -195,6 +211,43 @@ func (ss *syncSession) setWatermark(table string, next int64) {
 	_ = SetSyncState(ss.s, watermarkKey(ss.p.ID, table), strconv.FormatInt(next, 10))
 }
 
+// failureTracker 收集本轮合入失败记录的最早 last_modified_time，供水位封顶。
+type failureTracker struct{ minLMT int64 }
+
+// note 记一条失败记录的水位（0 值 lmt 无法参与比较，忽略）。
+func (f *failureTracker) note(lmt int64) {
+	if lmt > 0 && (f.minLMT == 0 || lmt < f.minLMT) {
+		f.minLMT = lmt
+	}
+}
+
+// resolvePushRecordID 返回该行应使用的远端 record_id：优先行内已回填值，
+// 其次回填中断时记录在 sync_state 的 pending id（重跑据此复用同一远端记录）。
+func (ss *syncSession) resolvePushRecordID(entity string, id int64, recordID string) string {
+	if recordID != "" {
+		return recordID
+	}
+	if pending, found, err := GetSyncState(ss.s, pendingRecordKey(entity, id)); err == nil && found {
+		return pending // 可能为空串：无 pending
+	}
+	return ""
+}
+
+// markPulled 在本地合入完成后回填同步元数据：先记 pending id（回填中断时 push/pull
+// 仍能按 id 复用同一远端记录），回填失败降级为告警并返回 false——本轮继续、
+// 该记录经水位封顶在下轮重试，不再中止整轮同步。
+func (ss *syncSession) markPulled(entity string, id int64, recordID, hash string) bool {
+	if err := SetSyncState(ss.s, pendingRecordKey(entity, id), recordID); err != nil {
+		ss.warn("记录 %s#%d 的 pending record_id 失败: %v", entity, id, err)
+	}
+	if err := MarkSyncedRecord(ss.s, entity, id, recordID, hash); err != nil {
+		ss.warn("回填 %s#%d 的同步元数据失败（下轮将重试合入）: %v", entity, id, err)
+		return false
+	}
+	_ = SetSyncState(ss.s, pendingRecordKey(entity, id), "") // 清除 pending；失败无害（仅在 record_id 为空时才查）
+	return true
+}
+
 // —— push ————————————————————————————————————————————————————————————————
 
 // pushVersions 推送本地版本脏行：无 record_id 建记录并回填，否则更新；软删不适用版本表。
@@ -209,19 +262,26 @@ func (ss *syncSession) pushVersions() error {
 		if hash == v.BitableSyncedHash {
 			continue // 与上次同步一致，免调用
 		}
-		recID := v.BitableRecordID
+		recID := ss.resolvePushRecordID("version", v.ID, v.BitableRecordID)
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, fields)
-		} else {
-			err = ss.api.RecordUpdate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, recID, fields)
-		}
-		if err != nil {
+			if err != nil {
+				ss.warn("推送版本 %s 失败（本地变更已保留，恢复后可补推）: %v", v.Name, err)
+				continue
+			}
+			// 先记 pending id 再回填：回填中断时下轮按它复用同一远端记录（幂等重跑）
+			if err := SetSyncState(ss.s, pendingRecordKey("version", v.ID), recID); err != nil {
+				ss.warn("记录版本 %d 的 pending record_id 失败: %v", v.ID, err)
+			}
+		} else if err = ss.api.RecordUpdate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, recID, fields); err != nil {
 			ss.warn("推送版本 %s 失败（本地变更已保留，恢复后可补推）: %v", v.Name, err)
 			continue
 		}
 		if err := MarkSyncedRecord(ss.s, "version", v.ID, recID, hash); err != nil {
-			return err
+			ss.warn("回填版本 %s 的同步元数据失败（远端记录 %s 已保留，下轮复用）: %v", v.Name, recID, err)
+			continue
 		}
+		_ = SetSyncState(ss.s, pendingRecordKey("version", v.ID), "") // 回填成功即清 pending
 		ss.res.Pushed++
 	}
 	return nil
@@ -254,19 +314,26 @@ func (ss *syncSession) pushTasks() error {
 		if hash == t.BitableSyncedHash {
 			continue
 		}
-		recID := t.BitableRecordID
+		recID := ss.resolvePushRecordID("task", t.ID, t.BitableRecordID)
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, fields)
-		} else {
-			err = ss.api.RecordUpdate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, recID, fields)
-		}
-		if err != nil {
+			if err != nil {
+				ss.warn("推送任务 %d 失败（本地变更已保留，恢复后可补推）: %v", t.ID, err)
+				continue
+			}
+			// 先记 pending id 再回填：回填中断时下轮按它复用同一远端记录（幂等重跑）
+			if err := SetSyncState(ss.s, pendingRecordKey("task", t.ID), recID); err != nil {
+				ss.warn("记录任务 %d 的 pending record_id 失败: %v", t.ID, err)
+			}
+		} else if err = ss.api.RecordUpdate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, recID, fields); err != nil {
 			ss.warn("推送任务 %d 失败（本地变更已保留，恢复后可补推）: %v", t.ID, err)
 			continue
 		}
 		if err := MarkSyncedRecord(ss.s, "task", t.ID, recID, hash); err != nil {
-			return err
+			ss.warn("回填任务 %d 的同步元数据失败（远端记录 %s 已保留，下轮复用）: %v", t.ID, recID, err)
+			continue
 		}
+		_ = SetSyncState(ss.s, pendingRecordKey("task", t.ID), "") // 回填成功即清 pending
 		ss.res.Pushed++
 	}
 	return nil
@@ -301,9 +368,12 @@ func (ss *syncSession) lwwPlan(entity string, local map[string]any, localSyncedH
 	if remoteHash == localSyncedHash {
 		return true, false // 自回声：内容与上次同步一致
 	}
-	localDirty := ContentHash(local) != ancestorHash
+	localHash := ContentHash(local)
+	localDirty := localHash != ancestorHash
 	remoteChanged := remoteHash != ancestorHash
-	if localDirty && remoteChanged {
+	// 远端内容与本地当前内容一致时没有"丢失的本地修改"，不构成冲突
+	//（回填中断等场景下两侧已自然收敛，只需刷新 synced_hash）。
+	if localDirty && remoteChanged && remoteHash != localHash {
 		conflict = true
 		ss.res.Conflicts = append(ss.res.Conflicts,
 			fmt.Sprintf("%s#%d 本地有未同步修改，已被 Bitable 侧覆盖(LWW)", entity, localID))
@@ -313,6 +383,7 @@ func (ss *syncSession) lwwPlan(entity string, local map[string]any, localSyncedH
 }
 
 // pullVersions 拉取版本表：水位增量 + 本地缺行合入 + 回声/LWW 覆盖。
+// 合入失败的记录压住水位（capWatermark），下轮重试；成功行重处理由回声判定跳过。
 func (ss *syncSession) pullVersions() error {
 	prev := ss.getWatermark("versions")
 	recs, err := ss.api.RecordSearch(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID)
@@ -325,9 +396,12 @@ func (ss *syncSession) pullVersions() error {
 	}
 	byRecord := map[string]model.Version{}
 	byName := map[string]model.Version{}
+	var failures failureTracker
 	maxLMT := prev
 	for _, v := range versions {
-		byRecord[v.BitableRecordID] = v
+		if rid := ss.resolvePushRecordID("version", v.ID, v.BitableRecordID); rid != "" {
+			byRecord[rid] = v // 含回填中断的 pending id，pull 不得据此重复建行
+		}
 		byName[v.Name] = v
 	}
 	for _, rec := range recs {
@@ -339,6 +413,7 @@ func (ss *syncSession) pullVersions() error {
 		}
 		changed, missing, warns := FieldsToVersion(rec.Fields, model.Version{ProjectID: ss.p.ID})
 		if len(missing) > 0 {
+			failures.note(rec.LastModifiedTime) // 缺字段跳过也压住水位，字段补全后下轮重试
 			ss.warn("跳过版本记录 %s: 缺字段 %v", rec.RecordID, missing)
 			continue
 		}
@@ -358,12 +433,19 @@ func (ss *syncSession) pullVersions() error {
 				ProjectID: ss.p.ID, Name: changed.Name,
 				TargetDate: changed.TargetDate, Status: changed.Status, Notes: changed.Notes,
 			}, ss.actor, nil)
-			if err != nil { // 常见为状态非法等数据问题：告警跳过，保留水位外重试机会
+			if err != nil { // 常见为状态非法等数据问题：告警跳过并压住水位，下轮重试
+				failures.note(rec.LastModifiedTime)
 				ss.warn("合入远端版本 %q 失败: %v", changed.Name, err)
 				continue
 			}
-			if err := MarkSyncedRecord(ss.s, "version", v.ID, rec.RecordID, ContentHash(VersionToFields(v))); err != nil {
-				return err
+			// 版本映射表必须随合入刷新：同轮后续任务记录的版本列要能解析到它
+			ss.verIDToName[v.ID] = v.Name
+			ss.verNameToID[v.Name] = v.ID
+			byName[v.Name] = v
+			byRecord[rec.RecordID] = v
+			if !ss.markPulled("version", v.ID, rec.RecordID, ContentHash(VersionToFields(v))) {
+				failures.note(rec.LastModifiedTime)
+				continue
 			}
 			ss.res.Pulled++
 			continue
@@ -381,19 +463,22 @@ func (ss *syncSession) pullVersions() error {
 		if _, err := ss.s.UpdateVersion(local.ID, store.VersionChanges{
 			Status: &changed.Status, TargetDate: &changed.TargetDate, Notes: &changed.Notes,
 		}, ss.actor, nil); err != nil {
+			failures.note(rec.LastModifiedTime)
 			ss.warn("覆盖本地版本 %d 失败: %v", local.ID, err)
 			continue
 		}
-		if err := MarkSyncedRecord(ss.s, "version", local.ID, rec.RecordID, remoteHash); err != nil {
-			return err
+		if !ss.markPulled("version", local.ID, rec.RecordID, remoteHash) {
+			failures.note(rec.LastModifiedTime)
+			continue
 		}
 		ss.res.Pulled++
 	}
-	ss.setWatermark("versions", maxLMT)
+	ss.setWatermark("versions", capWatermark(maxLMT, failures.minLMT))
 	return nil
 }
 
 // pullTasks 拉取任务表：已废弃墓碑归档 → 水位增量 → 本地缺行插入 → 回声/LWW 覆盖。
+// 合入失败的记录压住水位（capWatermark），下轮重试；成功行重处理由回声判定跳过。
 func (ss *syncSession) pullTasks() error {
 	prev := ss.getWatermark("tasks")
 	recs, err := ss.api.RecordSearch(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID)
@@ -405,9 +490,12 @@ func (ss *syncSession) pullTasks() error {
 		return fmt.Errorf("加载任务失败: %w", err)
 	}
 	byRecord := map[string]model.Task{}
+	var failures failureTracker
 	maxLMT := prev
 	for _, t := range tasks {
-		byRecord[t.BitableRecordID] = t
+		if rid := ss.resolvePushRecordID("task", t.ID, t.BitableRecordID); rid != "" {
+			byRecord[rid] = t // 含回填中断的 pending id，pull 不得据此重复建行
+		}
 	}
 	for _, rec := range recs {
 		if rec.LastModifiedTime > maxLMT {
@@ -417,6 +505,7 @@ func (ss *syncSession) pullTasks() error {
 			if local, ok := byRecord[rec.RecordID]; ok {
 				if !local.Archived {
 					if err := ss.s.SoftDeleteTask(local.ID, ss.actor, nil); err != nil {
+						failures.note(rec.LastModifiedTime)
 						ss.warn("归档任务 %d 失败: %v", local.ID, err)
 						continue
 					}
@@ -441,6 +530,7 @@ func (ss *syncSession) pullTasks() error {
 		}
 		changed, missing, warns := FieldsToTask(rec.Fields, base, ss.nameToID, ss.verNameToID)
 		if len(missing) > 0 {
+			failures.note(rec.LastModifiedTime) // 缺字段跳过也压住水位，字段补全后下轮重试
 			ss.warn("跳过任务记录 %s: 缺字段 %v", rec.RecordID, missing)
 			continue
 		}
@@ -456,11 +546,13 @@ func (ss *syncSession) pullTasks() error {
 				StartDate: changed.StartDate, DueDate: changed.DueDate, VersionID: changed.VersionID,
 			}, ss.actor, nil)
 			if err != nil {
+				failures.note(rec.LastModifiedTime)
 				ss.warn("合入远端任务 %q 失败: %v", changed.Title, err)
 				continue
 			}
-			if err := MarkSyncedRecord(ss.s, "task", t.ID, rec.RecordID, remoteHash); err != nil {
-				return err
+			if !ss.markPulled("task", t.ID, rec.RecordID, remoteHash) {
+				failures.note(rec.LastModifiedTime)
+				continue
 			}
 			ss.res.Pulled++
 			continue
@@ -477,14 +569,16 @@ func (ss *syncSession) pullTasks() error {
 			EstimateDays: &changed.EstimateDays, StartDate: &changed.StartDate, DueDate: &changed.DueDate,
 			AssigneeID: &changed.AssigneeID, VersionID: &changed.VersionID,
 		}, ss.actor, nil); err != nil {
+			failures.note(rec.LastModifiedTime)
 			ss.warn("覆盖本地任务 %d 失败: %v", local.ID, err)
 			continue
 		}
-		if err := MarkSyncedRecord(ss.s, "task", local.ID, rec.RecordID, remoteHash); err != nil {
-			return err
+		if !ss.markPulled("task", local.ID, rec.RecordID, remoteHash) {
+			failures.note(rec.LastModifiedTime)
+			continue
 		}
 		ss.res.Pulled++
 	}
-	ss.setWatermark("tasks", maxLMT)
+	ss.setWatermark("tasks", capWatermark(maxLMT, failures.minLMT))
 	return nil
 }

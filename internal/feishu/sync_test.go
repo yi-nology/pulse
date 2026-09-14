@@ -33,6 +33,16 @@ func syncEnv(t *testing.T) (*store.Store, model.Project, model.Member) {
 	return s, p, m
 }
 
+// mustMember 取回（必要时创建）指定名字的 human 成员。
+func mustMember(t *testing.T, s *store.Store, name string) model.Member {
+	t.Helper()
+	m, err := s.GetOrCreateMember(name, "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
 // mustCreateTask 建一个已指派 tester 的任务。
 func mustCreateTask(t *testing.T, s *store.Store, projectID int64, actor model.Member, title string) model.Task {
 	t.Helper()
@@ -441,8 +451,139 @@ func TestSyncSearchErrorPropagates(t *testing.T) {
 	}
 }
 
+// —— 评审修复 1：同一轮 pull 的版本与任务要立即关联（版本映射表需随合入刷新）—————————
+
+func TestSyncPulledVersionLinksToPulledTask(t *testing.T) {
+	s, p, _ := syncEnv(t)
+	fake := &fakeAPI{searchByTable: map[string][]Record{
+		"tblVer": {taskRecord("recV9", 2000, map[string]any{
+			"版本名": "v9", "状态": "planned",
+		})},
+		"tblTask": {taskRecord("recT", 2001, map[string]any{
+			"任务名": "关联任务", "状态": "todo", "优先级": "3", "预估人日": float64(1), "版本": "v9",
+		})},
+	}}
+
+	res, err := SyncProject(context.Background(), clientWith(fake), s, p,
+		mustMember(t, s, "tester"))
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if res.Pulled != 2 {
+		t.Fatalf("Pulled = %d, want 2（版本+任务）(%+v)", res.Pulled, res)
+	}
+	vs, err := s.ListVersions(p.ID)
+	if err != nil || len(vs) != 1 || vs[0].Name != "v9" {
+		t.Fatalf("远端版本未合入: %+v err=%v", vs, err)
+	}
+	tasks, _ := s.ListTasks(p.ID, store.TaskFilter{IncludeArchived: true})
+	if len(tasks) != 1 {
+		t.Fatalf("远端任务未合入: %+v", tasks)
+	}
+	if tasks[0].VersionID != vs[0].ID {
+		t.Fatalf("任务的 VersionID = %d, want 同轮合入的版本 %d（版本映射表必须随合入刷新）",
+			tasks[0].VersionID, vs[0].ID)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "不在本地版本表") {
+			t.Fatalf("同轮合入的版本不应再告警: %+v", res.Warnings)
+		}
+	}
+}
+
+// —— 评审修复 2：水位必须压在最早失败记录之前，下轮重试（成功行重处理走回声跳过）———
+
+func TestSyncWatermarkCappedOnFailedMerge(t *testing.T) {
+	s, p, _ := syncEnv(t)
+	fake := &fakeAPI{}
+	ctx := context.Background()
+
+	// 第一轮：recOK 正常合入（lmt 2500）；recBad 缺任务名（lmt 2450）告警跳过
+	bad := map[string]any{"状态": "todo", "优先级": "3", "预估人日": float64(2)}
+	good := map[string]any{"任务名": "正常任务", "状态": "todo", "优先级": "3", "预估人日": float64(2)}
+	fake.searchByTable = searchScript("tblTask",
+		taskRecord("recOK", 2500, good), taskRecord("recBad", 2450, bad))
+	res1, err := SyncProject(ctx, clientWith(fake), s, p, mustMember(t, s, "tester"))
+	if err != nil {
+		t.Fatalf("第一轮: %v", err)
+	}
+	if res1.Pulled != 1 || len(res1.Warnings) == 0 {
+		t.Fatalf("第一轮应合入 1 条并告警 1 条: %+v", res1)
+	}
+	// 水位必须停在最早失败记录之前（2450-1），不得推进到 2500
+	wm, found, err := GetSyncState(s, "pull_watermark:1:tasks")
+	if err != nil || !found || wm != "2449" {
+		t.Fatalf("水位 = %q found=%v err=%v, want 2449（压在失败记录之前）", wm, found, err)
+	}
+
+	// 第二轮：recBad 补全字段（lmt 不变，模拟本地阻塞解除），必须被重试合入
+	fixed := map[string]any{"任务名": "补全的任务", "状态": "todo", "优先级": "3", "预估人日": float64(2)}
+	fake.searchByTable = searchScript("tblTask",
+		taskRecord("recOK", 2500, good), taskRecord("recBad", 2450, fixed))
+	res2, err := SyncProject(ctx, clientWith(fake), s, p, mustMember(t, s, "tester"))
+	if err != nil {
+		t.Fatalf("第二轮: %v", err)
+	}
+	if res2.Pulled != 1 {
+		t.Fatalf("失败记录必须被下轮重试合入: %+v", res2)
+	}
+	tasks, _ := s.ListTasks(p.ID, store.TaskFilter{IncludeArchived: true})
+	var merged bool
+	for _, tk := range tasks {
+		if tk.Title == "补全的任务" {
+			merged = true
+		}
+	}
+	if !merged {
+		t.Fatalf("补全的记录未合入: %+v", tasks)
+	}
+}
+
+// —— 评审修复 3：Create 成功但回填中断后，重跑必须复用既有远端记录（不重复建行）———
+
+func TestSyncReusesPendingRecordAfterInterruptedBackfill(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	tk := mustCreateTask(t, s, p.ID, actor, "写周报")
+	// 模拟中断态：远端记录已建（recX），本地 record_id 为空，仅 sync_state 里有 pending id
+	if err := SetSyncState(s, pendingRecordKey("task", tk.ID), "recX"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := TaskToFields(model.Task{Title: "写周报", Status: "todo", Priority: 3,
+		EstimateDays: 2, AssigneeID: m.ID}, map[int64]string{m.ID: "tester"}, map[int64]string{})
+	fake := &fakeAPI{searchByTable: searchScript("tblTask", taskRecord("recX", 3000, remote))}
+
+	res, err := SyncProject(context.Background(), clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	// push：复用 pending id 走 RecordUpdate，绝不再 RecordCreate（防远端重复）
+	if len(fake.createdFields) != 0 {
+		t.Fatalf("重跑不得重复建行: created=%+v", fake.createdFields)
+	}
+	if len(fake.updatedFields) != 1 {
+		t.Fatalf("应复用 pending id 走更新: %+v", fake.updatedFields)
+	}
+	// pull：远端 recX 匹配到本地行 → 自回声，不插重复行
+	if res.SkippedEcho != 1 || res.Pulled != 0 {
+		t.Fatalf("应自回声跳过: %+v", res)
+	}
+	tasks, _ := s.ListTasks(p.ID, store.TaskFilter{IncludeArchived: true})
+	if len(tasks) != 1 || tasks[0].BitableRecordID != "recX" || len(tasks[0].BitableSyncedHash) != 16 {
+		t.Fatalf("record_id/hash 未回填: %+v", tasks)
+	}
+	// pending 用完即清
+	if v, found, err := GetSyncState(s, pendingRecordKey("task", tk.ID)); err != nil || (found && v != "") {
+		t.Fatalf("pending id 未清除: v=%q found=%v err=%v", v, found, err)
+	}
+}
+
 // —— 补充：TaskToFields/FieldsToTask 往返一致（回声判定的根基）———————————————————
 func TestTaskFieldsRoundTrip(t *testing.T) {
+
 	verIDToName := map[int64]string{7: "v1.0"}
 	nameToID := map[string]int64{"tester": 3}
 	tk := model.Task{Title: "T", Status: "in_progress", Priority: 1, EstimateDays: 2.5,
