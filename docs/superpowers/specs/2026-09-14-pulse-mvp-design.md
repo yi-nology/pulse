@@ -21,6 +21,7 @@
 | 甘特图呈现 | 同步任务到**多维表格镜像**，用飞书原生甘特视图 | 免渲染 PNG，人的观看体验最好 |
 | 数据位置 | `~/.pulse/`（全局单库多项目） | 用户指定；不放项目目录，避免 git 二进制合并问题 |
 | 交互形态 | CLI（人）+ MCP stdio（agent） | ZCode/CC/Codex 均为 MCP client |
+| 多人协作语义 | **协作内容放飞书**：pulse 管结构/状态/链接，纪要/清单类内容按模板建飞书文档由多人协作填写，内容不回流 | 保持单机本地、不加服务端，贴合"飞书沉淀结果"定位 |
 
 ## 2. 架构
 
@@ -82,6 +83,53 @@ activity(id PK, project_id FK,          -- 审计核心表：一切变更留痕
 - **状态流转**：不做硬性状态机限制（任意状态可改任意状态）；但 done → 非-done 在审计中记为 `reopen` 动作，与普通 `update_status` 区分，供周报统计"返工"。
 - **v1 甘特不做自动排程**：条形位置 = 手动 start/due；依赖以箭头呈现；**依赖倒置**（A 依赖 B 但 B.due > A.due）等 violations 在报表风险区列出。自动排程留待后续。
 - 所有写操作（CLI 与 MCP 同路径）自动落 `activity`。
+
+### 3.1 v1.1 扩展：研发交付闭环实体（设计现在定，实现排 MVP 后）
+
+覆盖 需求 → 评审 → 开发 → 提测 → bug → 发版 流程。全部复用 §3 的模式（状态字段 + activity 审计 + 可选绑定飞书文档）：
+
+```sql
+requirements(id PK, project_id FK, title, description,
+             status CHECK(status IN ('proposed','reviewing','accepted','in_dev','delivered','rejected')),
+             priority INTEGER, owner_id FK members, source TEXT,
+             feishu_doc_token, created_at, updated_at)
+-- tasks 增加 requirement_id FK NULL（需求拆解为任务）
+
+reviews(id PK, project_id FK, requirement_id FK NULL, kind TEXT,   -- requirement|release|...
+        held_at DATETIME,
+        conclusion CHECK(conclusion IN ('pending','passed','passed_with_notes','rejected')),
+        feishu_doc_token, created_by FK members, created_at)
+
+meetings(id PK, project_id FK, title, held_at DATETIME,
+         feishu_doc_token, created_by FK members, created_at)      -- 参会人/纪要在飞书文档内协作维护
+
+bugs(id PK, project_id FK, title, description,
+     severity INTEGER,                                             -- 1=P0
+     status CHECK(status IN ('open','fixing','fixed','verified','closed','wontfix')),
+     reporter_id FK, assignee_id FK NULL, requirement_id FK NULL,
+     found_version_id FK versions NULL, fix_task_id FK tasks NULL,
+     created_at, updated_at)
+
+test_submissions(id PK, project_id FK, version_id FK, requirement_id FK NULL,
+                 submitted_by FK, test_owner_id FK,
+                 status CHECK(status IN ('draft','submitted','testing','passed','failed')),
+                 scope TEXT,                                       -- 结构化范围；自检清单在飞书
+                 feishu_doc_token, submitted_at, concluded_at, created_at)
+
+releases(id PK, project_id FK, version_id FK,
+         status CHECK(status IN ('preparing','testing','released','rolled_back')),
+         release_manager_id FK members, released_at DATETIME,
+         feishu_doc_token, notes, created_at)
+```
+
+### 3.2 协作记录模式（v1.1 统一交互）
+
+pulse 持有每条记录的结构化字段（状态/负责人/时间点/关联关系）；需要多人共同填写的内容（评审结论、会议纪要、提测自检清单、发版清单）由 pulse 按**内置模板**在飞书创建文档，token 回填到记录。约束：
+
+- 文档内容**不回流**：pulse 不解析飞书文档内容，状态流转只由人经 CLI/MCP 显式操作（或 agent 代操作，记 activity、`on_behalf_of` 归因）。
+- 评审/会议产出的**行动项**：需要跟踪时，由人或 agent 经 MCP 建 task 并在纪要中提及；pulse 不自动从文档提取。
+- 模板共 5 套：提测单、发版记录、评审纪要、会议纪要、需求文档（可选——短需求直接写 pulse 的 description 字段，长 PRD 才建文档）；复用 §6 飞书 adapter 的块写入能力（`feishu record new test-submission --version v1.2` 一类命令）。
+- 对应 CLI 子命令与 MCP 工具（`create_requirement`/`update_bug_status`/`create_test_submission`/`create_release` 等）在 v1.1 阶段随实体一起交付。
 
 ## 4. 四份管理结果（core 生成）
 
@@ -152,9 +200,9 @@ Go 1.25；SQLite 用 `modernc.org/sqlite`（纯 Go、无 cgo，单二进制好�
 - feishu adapter：`httptest` mock OpenAPI 合同测试（upsert 幂等、429 重试、块结构）。
 - E2E：真实飞书测试租户手动清单（bind→publish→文档/镜像检查）。
 
-## 10. MVP 明确不做
+## 10. MVP 明确不做（v1.1 或更晚）
 
-站会/日报收集、群 bot、自动排程（依赖驱动日程推算）、多机同步/协作、server 模式、自建 Web 界面、飞书→本地回流、pulse 内置 LLM 调用、多租户/ISV。
+研发交付闭环六实体（需求/评审/会议/bug/提测/发版，§3.1-3.2，v1.1 首批）、自动排程（依赖驱动日程推算）、站会/日报收集、群 bot、多机同步/协作、server 模式、自建 Web 界面、飞书→本地回流、pulse 内置 LLM 调用、多租户/ISV。
 
 ## 11. 里程碑建议（供 writing-plans 展开）
 
@@ -163,3 +211,4 @@ Go 1.25；SQLite 用 `modernc.org/sqlite`（纯 Go、无 cgo，单二进制好�
 3. MCP server（agent 可驱动 = 核心价值验证点）
 4. feishu adapter（bind/publish + bitable 镜像）
 5. E2E 打磨 + README
+6. v1.1：研发交付闭环六实体 + 协作记录模板 + 对应 CLI/MCP（MVP 验收后启动）
