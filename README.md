@@ -186,6 +186,16 @@ pulse report weekly --project demo                    # 周报 Markdown
 | `pulse feishu publish --project K --report weekly\|versions\|all` | 报表沉淀到飞书文档（每次追加新块，带触发人落款） |
 | `pulse mcp` | 启动 MCP server（stdio），需 `PULSE_ACTOR` 环境变量 |
 
+## 每人日报
+
+```bash
+pulse report daily --project demo                 # 全员日报（每人一节）输出到终端
+pulse report daily --project demo --person zhangyi --out zhangyi.md
+pulse feishu publish --project demo --report daily # 全员日报沉淀到飞书文档（按人分节）
+```
+
+日报由任务数据自动生成（今日完成/进行中/明日计划/风险/名下 bug），感想与补充由成员直接写在飞书文档对应小节下；agent（claude/codex）的任务完成同样计入其个人日报。
+
 ## 已知限制
 
 - **publish 追加不去重**：`pulse feishu publish` 每次向沉淀文档追加新块，不检测重复。同一份报表重复发布会产生重复段落；需要最新结论时以最新一次发布为准，旧段落需在飞书文档中手动清理。

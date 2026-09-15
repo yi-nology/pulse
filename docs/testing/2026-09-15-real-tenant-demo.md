@@ -88,3 +88,9 @@
 - 现象：加入版本进度列后，每次 sync 恒定"已推送 2、拉取 2"（v0.9/v1.0 永动重推重拉）。
 - 根因：pull 合并分支的远端哈希用 `versionFields(changed)`，而 `changed`（FieldsToVersion 产物）无 ID → 进度统计按 `version_id=0` 查询恒为 0 → 远端哈希 ≠ 本地推哈希 → 永不回声、每轮误判变更。P2 哈希 4d2cf7 即"零进度哈希"。
 - 修复：合并分支进度按 `local.ID` 计算（sync.go，`VersionProgress(ss.p.ID, local.ID)`）。验证：连续三轮 sync = 推 2（写入正确进度）→ 0 → 0，全回声稳定。
+
+## REAL-4（真 bug，已修复）：docx children 单次追加块数超限
+
+- 现象：daily 全员日报 63 块一次性 BlockAppend → 真实租户 99992402 field validation failed（63 块逐块单独 POST 全部合法）。
+- 根因：飞书 docx children create 单次请求有块数上限（约 50）。
+- 修复：BlockAppend 按 40 块分批循环追加（api.go），fake/测试语义不变。真实重发验证：142 块全部写入 ✅。

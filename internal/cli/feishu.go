@@ -175,7 +175,7 @@ func printBoundTokens(out io.Writer, p model.Project, missingDoc bool) {
 	}
 }
 
-// newFeishuPublishCmd 实现 `pulse feishu publish --project demo --report weekly|versions|all`：
+// newFeishuPublishCmd 实现 `pulse feishu publish --project demo --report weekly|versions|daily|all`：
 // 先静默同步（失败仅警告，离线可发布本地数据），生成报表并追加到绑定文档；
 // 未绑定文档时自动创建并写回。每次 publish 追加新块（时间线性质，重跑产生新段落
 // 是文档化行为），顶部防混淆标题块 + 底部落款块标识来源与触发人。
@@ -183,12 +183,12 @@ func newFeishuPublishCmd() *cobra.Command {
 	var projectKey, report string
 	cmd := &cobra.Command{
 		Use:   "publish",
-		Short: "把报表（weekly|versions|all）沉淀到项目绑定的飞书文档",
+		Short: "把报表（weekly|versions|daily|all）沉淀到项目绑定的飞书文档",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch report {
-			case "weekly", "versions", "all":
+			case "weekly", "versions", "daily", "all":
 			default:
-				return fmt.Errorf("report 必须为 weekly|versions|all，收到 %q", report)
+				return fmt.Errorf("report 必须为 weekly|versions|daily|all，收到 %q", report)
 			}
 			s, cfg, err := openApp()
 			if err != nil {

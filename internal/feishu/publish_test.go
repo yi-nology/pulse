@@ -203,13 +203,14 @@ func TestPublishAllTwoSections(t *testing.T) {
 	if err := PublishReport(context.Background(), clientWith(fake), s, p, "all", "tester"); err != nil {
 		t.Fatalf("PublishReport(all): %v", err)
 	}
-	if len(fake.blockBlocks) != 2 {
-		t.Fatalf("BlockAppend 次数 = %d, want 2（weekly + versions）", len(fake.blockBlocks))
+	if len(fake.blockBlocks) != 3 {
+		t.Fatalf("BlockAppend 次数 = %d, want 3（weekly + versions + daily）", len(fake.blockBlocks))
 	}
 	h1 := blockText(t, fake.blockBlocks[0][0])
 	h2 := blockText(t, fake.blockBlocks[1][0])
-	if !strings.Contains(h1, "周报") || !strings.Contains(h2, "版本规划") {
-		t.Fatalf("两段标题 = %q / %q, want 周报在前、版本规划在后", h1, h2)
+	h3 := blockText(t, fake.blockBlocks[2][0])
+	if !strings.Contains(h1, "周报") || !strings.Contains(h2, "版本规划") || !strings.Contains(h3, "每日日报") {
+		t.Fatalf("三段标题 = %q / %q / %q, want 周报、版本规划、每日日报依次在前", h1, h2, h3)
 	}
 	for i, blocks := range fake.blockBlocks {
 		last := blocks[len(blocks)-1]
@@ -321,8 +322,8 @@ func TestPublishRejectsUnknownReport(t *testing.T) {
 	fake := &fakeAPI{}
 	captureWarn(t)
 
-	err := PublishReport(context.Background(), clientWith(fake), s, p, "daily", "tester")
-	if err == nil || !strings.Contains(err.Error(), "weekly|versions|all") {
+	err := PublishReport(context.Background(), clientWith(fake), s, p, "bogus", "tester")
+	if err == nil || !strings.Contains(err.Error(), "weekly|versions|daily|all") {
 		t.Fatalf("非法 report 必须报引导错误, got %v", err)
 	}
 	if len(fake.calls) != 0 {

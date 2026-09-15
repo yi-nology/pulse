@@ -29,15 +29,16 @@ const (
 	blockTypeTodo     = 17 // 待办块
 )
 
-// PublishReport 把项目的指定报表（weekly|versions|all）沉淀到飞书文档：
-// 未绑定文档自动创建并写回；all = weekly + versions 两次独立追加。
+// PublishReport 把项目的指定报表（weekly|versions|daily|all）沉淀到飞书文档：
+// 未绑定文档自动创建并写回；all = weekly + versions 两次独立追加；daily = 全员
+// 每人一节（member 日报按人分节追加到同一沉淀文档，按天成段）。
 // actorName 是触发人展示名（防混淆标题与落款、活动归属共用）。
 func PublishReport(ctx context.Context, c *Client, s *store.Store, p model.Project,
 	report string, actorName string) error {
 	switch report {
-	case "weekly", "versions", "all":
+	case "weekly", "versions", "daily", "all":
 	default:
-		return fmt.Errorf("report 必须为 weekly|versions|all，收到 %q", report)
+		return fmt.Errorf("report 必须为 weekly|versions|daily|all，收到 %q", report)
 	}
 
 	// 静默同步（仅已绑定 base 时）：失败只警告，基于本地数据继续发布。
@@ -68,8 +69,10 @@ func PublishReport(ctx context.Context, c *Client, s *store.Store, p model.Proje
 		kinds = []string{"weekly"}
 	case "versions":
 		kinds = []string{"versions"}
+	case "daily":
+		kinds = []string{"daily"}
 	case "all":
-		kinds = []string{"weekly", "versions"}
+		kinds = []string{"weekly", "versions", "daily"}
 	}
 	for _, kind := range kinds {
 		blocks, err := publishBlocks(s, p.ID, kind, now, actorName)
@@ -100,8 +103,12 @@ func publishBlocks(s *store.Store, projectID int64, kind string, now time.Time, 
 		content, err = reports.VersionsText(s, projectID, now)
 		header = fmt.Sprintf("版本规划（生成于 %s，由 %s 触发）",
 			now.Format("2006-01-02 15:04"), actorName)
+	case "daily":
+		content, err = reports.AllDailyMarkdown(s, projectID, now)
+		header = fmt.Sprintf("每日日报（生成于 %s，由 %s 触发）",
+			now.Format("2006-01-02 15:04"), actorName)
 	default:
-		return nil, fmt.Errorf("report 必须为 weekly|versions|all，收到 %q", kind)
+		return nil, fmt.Errorf("report 必须为 weekly|versions|daily|all，收到 %q", kind)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("生成 %s 报表失败: %w", kind, err)

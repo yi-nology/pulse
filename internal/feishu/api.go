@@ -177,12 +177,25 @@ func (r remoteAPI) DocCreate(ctx context.Context, folderToken, title string) (do
 }
 
 // BlockAppend 向文档末尾追加内容块（index=-1 表示追加到最后一个子块之后）。
+// blockBatchSize 是 BlockAppend 单次请求追加的块数上限（真实租户实测大报表
+// 一次性提交会 99992402 校验失败，分批最稳）。
+const blockBatchSize = 40
+
 func (r remoteAPI) BlockAppend(ctx context.Context, docToken string, blocks []map[string]any) error {
 	// 文档根块的块 ID 即 document_id，故 path 中两处相同。
 	path := fmt.Sprintf("/open-apis/docx/v1/documents/%s/blocks/%s/children",
 		url.PathEscape(docToken), url.PathEscape(docToken))
-	return r.c.callAPI(ctx, http.MethodPost, path,
-		map[string]any{"index": -1, "children": blocks}, nil)
+	for start := 0; start < len(blocks); start += blockBatchSize {
+		end := start + blockBatchSize
+		if end > len(blocks) {
+			end = len(blocks)
+		}
+		if err := r.c.callAPI(ctx, http.MethodPost, path,
+			map[string]any{"index": -1, "children": blocks[start:end]}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // parseSeconds 把飞书回传的秒值统一成 int64：兼容裸数字、JSON 字符串、缺省/无法识别（返回 0）。

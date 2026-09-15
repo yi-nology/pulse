@@ -87,7 +87,7 @@ func Register(srv *mcp.Server, s *store.Store, agentName, defaultActor string) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_workload",
 		Description: "项目成员未来 14 天负载（到期未完成人日 / 容量）。" + requiredDesc}, c.getWorkload)
 	mcp.AddTool(srv, &mcp.Tool{Name: "publish_feishu",
-		Description: "把报表（weekly|versions|all）沉淀到飞书文档。" + requiredDesc}, c.publishFeishu)
+		Description: "把报表（weekly|versions|daily|all）沉淀到飞书文档。" + requiredDesc}, c.publishFeishu)
 	// v1.1 研发交付闭环 15 工具（requirements/bugs/test_submissions/releases/reviews/
 	// meetings），复用同一 core 依赖，注册体拆在 tools_v11.go。
 	RegisterDeliveryLoopTools(srv, c)
@@ -259,7 +259,7 @@ type getWorkloadIn struct {
 
 type publishFeishuIn struct {
 	Project string `json:"project" jsonschema:"项目 key（必填）"`
-	Report  string `json:"report" jsonschema:"weekly|versions|all（必填）"`
+	Report  string `json:"report" jsonschema:"weekly|versions|daily|all（必填）"`
 }
 
 // ---- 结果视图 ----
@@ -686,9 +686,9 @@ func (c *core) publishFeishu(_ context.Context, _ *mcp.CallToolRequest, in publi
 		return nil, nil, err
 	}
 	switch in.Report {
-	case "weekly", "versions", "all":
+	case "weekly", "versions", "daily", "all":
 	default:
-		return nil, nil, fmt.Errorf("report 必须为 weekly|versions|all，收到 %q", in.Report)
+		return nil, nil, fmt.Errorf("report 必须为 weekly|versions|daily|all，收到 %q", in.Report)
 	}
 	if PublishReportFunc == nil {
 		return nil, nil, errors.New("未配置飞书：请先在 ~/.pulse/config.yaml 配置 feishu.app_id/app_secret" +

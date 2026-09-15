@@ -356,20 +356,20 @@ func TestFeishuPublishEndToEnd(t *testing.T) {
 	}
 	assertActivity(t, s, p.ID, "feishu_publish", "tester")
 
-	// all：weekly + versions 两次追加
+	// all：weekly + versions + daily 三次追加
 	if _, errOut, err := runCLI(t, "feishu", "publish", "--project", "demo", "--report", "all"); err != nil {
 		t.Fatalf("publish all: %v stderr=%s", err, errOut)
 	}
-	if n := blockN.Load(); n != 3 {
-		t.Fatalf("all 后累计追加 = %d, want 3（weekly 单独 1 次 + all 的 2 次）", n)
+	if n := blockN.Load(); n != 4 {
+		t.Fatalf("all 后累计追加 = %d, want 4（weekly 单独 1 次 + all 的 3 次）", n)
 	}
 
 	// 非法 report 名：中文报错且不产生任何追加
-	_, errOut, err = runCLI(t, "feishu", "publish", "--project", "demo", "--report", "daily")
-	if err == nil || !strings.Contains(errOut, "weekly|versions|all") {
+	_, errOut, err = runCLI(t, "feishu", "publish", "--project", "demo", "--report", "bogus")
+	if err == nil || !strings.Contains(errOut, "weekly|versions|daily|all") {
 		t.Fatalf("非法 report 必须报错, err=%v stderr=%s", err, errOut)
 	}
-	if n := blockN.Load(); n != 3 {
+	if n := blockN.Load(); n != 4 {
 		t.Fatalf("非法 report 不应追加块, got %d", n)
 	}
 }
