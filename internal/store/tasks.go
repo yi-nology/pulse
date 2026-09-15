@@ -41,7 +41,7 @@ type TaskChanges struct {
 
 const taskCols = `id, project_id, title, description, assignee_id, status, priority,
 	estimate_days, start_date, due_date, version_id, bitable_record_id, bitable_synced_hash,
-	archived, status_changed_at, created_at, updated_at`
+	synced_at, archived, status_changed_at, created_at, updated_at`
 
 // scanTask 从一行结果扫描出 model.Task（assignee_id/version_id 为可空列，NULL 映射 0）。
 func scanTask(scan func(dest ...any) error) (model.Task, error) {
@@ -50,7 +50,7 @@ func scanTask(scan func(dest ...any) error) (model.Task, error) {
 	var archived int
 	if err := scan(&t.ID, &t.ProjectID, &t.Title, &t.Description, &assigneeID, &t.Status,
 		&t.Priority, &t.EstimateDays, &t.StartDate, &t.DueDate, &versionID,
-		&t.BitableRecordID, &t.BitableSyncedHash, &archived,
+		&t.BitableRecordID, &t.BitableSyncedHash, &t.SyncedAt, &archived,
 		&t.StatusChangedAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return model.Task{}, err
 	}

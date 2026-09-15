@@ -193,24 +193,26 @@ func (ss *syncSession) warn(format string, args ...any) {
 	ss.res.Warnings = append(ss.res.Warnings, fmt.Sprintf(format, args...))
 }
 
-// updatedAtLayout 与 store 落库的 updated_at 文本格式一致（UTC，无时区后缀）。
-const updatedAtLayout = "2006-01-02 15:04:05"
+// storeTimeLayout 与 store 落库的时间文本格式一致（UTC，无时区后缀）。
+const storeTimeLayout = "2006-01-02 15:04:05"
 
 // warnRecentLocalOverwrite 是 LWW 覆盖的 UX 增强（E2E-3，不改变合并语义）：
-// 双机 autopush 场景下后写者赢，被覆盖方在 sync 输出中原本毫无感知。当本地行的
-// updated_at 晚于"本次 pull 之前的旧水位"（说明上次 pull 之后本地近期有人为修改，
-// 其成果即将被飞书侧版本覆盖）且内容确实变化（非回声，调用方保证）时，补一条
-// 显式提示。旧水位为空（首轮全量）无从比较、updated_at 缺失或不可解析时静默跳过
-// （启发式宁缺毋滥）。版本表无 updated_at 列，该提示仅适用于任务。
-func (ss *syncSession) warnRecentLocalOverwrite(prevWatermark int64, t model.Task) {
-	if prevWatermark <= 0 || t.UpdatedAt == "" {
+// 双机 autopush 场景下后写者赢，被覆盖方在 sync 输出中原本毫无感知。判定基准是
+// synced_at（本行上次与飞书收敛的时刻，随 bitable_synced_hash 同点写入）：远端记录
+// 的 last_modified_time 晚于它，说明远端在我上次同步之后又变过——本次覆盖丢弃的是
+// 我已同步到飞书的成果，补一条显式提示。（不可用 pull 水位比较：autopush 的内嵌
+// pull 会把水位推进到晚于本地编辑时刻，水位比较在真实主路径上永不触发。）
+// synced_at 为空（元数据未回填：新拉行中断、旧库升级遗留）或不可解析、远端 lmt
+// 不晚于它时静默跳过（启发式宁缺毋滥）。版本表无 synced_at，该提示仅适用于任务。
+func (ss *syncSession) warnRecentLocalOverwrite(lmt int64, t model.Task) {
+	if lmt <= 0 || t.SyncedAt == "" {
 		return
 	}
-	ts, err := time.Parse(updatedAtLayout, t.UpdatedAt)
-	if err != nil || ts.Unix() <= prevWatermark {
+	ts, err := time.Parse(storeTimeLayout, t.SyncedAt)
+	if err != nil || lmt <= ts.Unix() {
 		return
 	}
-	ss.warn("任务 #%d %s 被飞书侧更新覆盖（本地近期有修改）", t.ID, t.Title)
+	ss.warn("任务 #%d %s 被飞书侧更新覆盖（覆盖的是你已同步到飞书的修改）", t.ID, t.Title)
 }
 
 // getWatermark 读取上轮 pull 水位（无记录/解析失败按 0 = 首轮全量）。
@@ -593,8 +595,8 @@ func (ss *syncSession) pullTasks() error {
 			ss.warn("覆盖本地任务 %d 失败: %v", local.ID, err)
 			continue
 		}
-		// 本地近期（上次 pull 之后）有过人为修改而被远端覆盖：补提示（E2E-3）
-		ss.warnRecentLocalOverwrite(prev, local)
+		// 本地已同步到飞书的成果被远端更新覆盖：补提示（E2E-3）
+		ss.warnRecentLocalOverwrite(rec.LastModifiedTime, local)
 		if !ss.markPulled("task", local.ID, rec.RecordID, remoteHash) {
 			failures.note(rec.LastModifiedTime)
 			continue

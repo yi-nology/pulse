@@ -31,6 +31,7 @@ type Task struct {
 	VersionID            int64 // 0 = 无版本
 	BitableRecordID      string
 	BitableSyncedHash    string
+	SyncedAt             string // 本行上次与飞书收敛的时刻（UTC 文本，sync 覆盖警告的判定基准）
 	Archived             bool
 	StatusChangedAt      string
 	CreatedAt, UpdatedAt string

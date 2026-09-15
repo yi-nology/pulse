@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   requirement_id INTEGER,
   bitable_record_id TEXT NOT NULL DEFAULT '',
   bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
   archived INTEGER NOT NULL DEFAULT 0,
   status_changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
@@ -108,8 +110,17 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// 既有库升级：为 tasks 补 synced_at（本行上次与飞书收敛的时刻，随 bitable_synced_hash
+	// 同点写入，供 sync 覆盖警告判定"远端晚于我上次同步又变了"）。新建库的 schema 已含
+	// 该列，ALTER 报 duplicate column 属预期，容忍即可。
+	if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN synced_at TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate add tasks.synced_at: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
