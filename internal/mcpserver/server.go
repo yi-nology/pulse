@@ -44,9 +44,10 @@ var PublishReportFunc func(st *store.Store, projectKey, report string) (any, err
 
 // AutopushFunc 是写工具成功后的自动同步注入点（与 PublishReportFunc 同模式，
 // 保持 mcpserver 零飞书依赖）：由 cli/mcp.go 装配为 feishu.BestEffort。
+// agentName 是当前 agent（PULSE_ACTOR）：实现方据此把同步活动归因到 agent。
 // 实现方必须遵守 autopush 契约：未配置/未绑定时静默、失败仅写 stderr 警告、
 // 绝不向上返回错误（工具结果不受影响）。nil 时写工具不做任何同步。
-var AutopushFunc func(st *store.Store, projectKey string)
+var AutopushFunc func(st *store.Store, projectKey, agentName string)
 
 // New 组装 pulse MCP server。default_actor 经 config.Load(config.DefaultPath())
 // 读取一次（PULSE_HOME 可重定向），供 delegated_by 的 behalf 解析使用；
@@ -123,7 +124,7 @@ func (c *core) project(key string) (model.Project, error) {
 // autopushKey 写工具成功后的尽力同步（按项目 key）；未装配或解析不到项目时静默。
 func (c *core) autopushKey(projectKey string) {
 	if AutopushFunc != nil && projectKey != "" {
-		AutopushFunc(c.st, projectKey)
+		AutopushFunc(c.st, projectKey, c.agentName)
 	}
 }
 
@@ -138,7 +139,7 @@ func (c *core) autopushProject(projectID int64) {
 	}
 	for _, p := range ps {
 		if p.ID == projectID {
-			AutopushFunc(c.st, p.Key)
+			AutopushFunc(c.st, p.Key, c.agentName)
 			return
 		}
 	}

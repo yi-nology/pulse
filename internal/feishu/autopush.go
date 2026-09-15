@@ -20,7 +20,9 @@ const autopushTimeout = 30 * time.Second
 // BestEffort 在写命令成功后自动 push：未配置凭据、项目不存在或未绑定 base 时静默返回；
 // 同步失败仅向 warnWriter 输出警告（本地变更已保留，恢复后 pulse sync 可补推）；
 // 同步成功但存在非致命告警（如缺字段跳过、单行合入失败）时同样逐条输出，保证可见。
-func BestEffort(s *store.Store, cfg *config.Config, projectKey string) {
+// agentName 是发起方的 agent 名（MCP 侧传 PULSE_ACTOR，CLI 侧传空串）：非空时同步
+// 活动（sync_conflict / pull 归档等）的执行者归因到该 agent 成员，而非配置的默认人类。
+func BestEffort(s *store.Store, cfg *config.Config, projectKey, agentName string) {
 	if cfg == nil || cfg.Feishu.AppID == "" || cfg.Feishu.AppSecret == "" {
 		return // 未配置飞书：静默
 	}
@@ -31,7 +33,7 @@ func BestEffort(s *store.Store, cfg *config.Config, projectKey string) {
 	if p.FeishuBitableAppToken == "" {
 		return // 未绑定：静默（bind 之前一切写命令照旧）
 	}
-	a, _, err := actor.Resolve(s, cfg.DefaultActor, "", "")
+	a, _, err := actor.Resolve(s, cfg.DefaultActor, agentName, "")
 	if err != nil {
 		warnAutopush(err)
 		return

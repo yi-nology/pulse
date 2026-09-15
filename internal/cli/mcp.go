@@ -39,8 +39,9 @@ func newMCPCmd() *cobra.Command {
 			}
 			// 装配点：写工具成功后的自动 push（与 CLI 写命令同一 BestEffort 契约：
 			// 未配置/未绑定静默、失败仅 stderr 警告、绝不影响工具结果）。
-			mcpserver.AutopushFunc = func(st *store.Store, projectKey string) {
-				feishu.BestEffort(st, cfg, projectKey)
+			// agentName 传入 PULSE_ACTOR：agent 触发的同步活动归因到 agent。
+			mcpserver.AutopushFunc = func(st *store.Store, projectKey, agentName string) {
+				feishu.BestEffort(st, cfg, projectKey, agentName)
 			}
 			// 装配点：publish_feishu 桥接到 feishu.PublishReport（保持 mcpserver 零飞书依赖）。
 			// 执行者归因到 agent（PULSE_ACTOR，E2E-4）：agent 发起的发布其落款与返回

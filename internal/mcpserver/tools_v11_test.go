@@ -489,11 +489,11 @@ func TestMCPAutopushOnDeliveryLoopWrites(t *testing.T) {
 
 	var mu sync.Mutex
 	var calls []string
-	AutopushFunc = func(st *store.Store, projectKey string) {
+	AutopushFunc = func(st *store.Store, projectKey, agentName string) {
 		mu.Lock()
 		calls = append(calls, projectKey)
 		mu.Unlock()
-		feishu.BestEffort(st, cfg, projectKey) // 与 cli/mcp.go 相同的真装配
+		feishu.BestEffort(st, cfg, projectKey, agentName) // 与 cli/mcp.go 相同的真装配
 	}
 	t.Cleanup(func() { AutopushFunc = nil })
 

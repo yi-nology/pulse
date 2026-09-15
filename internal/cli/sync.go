@@ -115,10 +115,11 @@ func pullIfStale(s *store.Store, cfg *config.Config, p model.Project, a model.Me
 }
 
 // bestEffort 把自动同步的警告导向当前命令的 stderr 后执行写后自动 push
-// （尽力而为：任何失败都不影响命令退出码）。
+// （尽力而为：任何失败都不影响命令退出码）。CLI 直连人类，agentName 恒为空串
+// （同步活动归因到配置的默认执行者，维持现状）。
 func bestEffort(cmd *cobra.Command, s *store.Store, cfg *config.Config, projectKey string) {
 	feishu.SetWarnWriter(cmd.ErrOrStderr())
-	feishu.BestEffort(s, cfg, projectKey)
+	feishu.BestEffort(s, cfg, projectKey, "")
 }
 
 // ensureRecordDoc 供六实体 create/record 命令补建协作记录文档（spec §3.2：默认
