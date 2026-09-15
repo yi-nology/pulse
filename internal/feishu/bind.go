@@ -109,17 +109,20 @@ type v11Table struct {
 	set     func(*store.FeishuTables, string)
 }
 
+// v11TableDefs 六实体表的定义序列。v1.2 列：需求表 需求UID（全局身份）；bug/提测表
+// 需求ID（需求 UID 引用，与评审表既有列同名同义——跨机按 UID 解析，修复本地 id
+// 撞号错链）。
 func v11TableDefs() []v11Table {
 	return []v11Table{
-		{"需求表", []string{"需求名", "状态", "负责人", "优先级", "描述"},
+		{"需求表", []string{"需求名", "状态", "负责人", "优先级", "描述", "需求UID"},
 			func(t *store.FeishuTables, id string) { t.Requirements = id }},
 		{"评审表", []string{"评审类型", "结论", "评审时间", "需求ID"},
 			func(t *store.FeishuTables, id string) { t.Reviews = id }},
 		{"会议表", []string{"会议标题", "时间"},
 			func(t *store.FeishuTables, id string) { t.Meetings = id }},
-		{"bug表", []string{"标题", "严重级", "状态", "负责人", "发现版本"},
+		{"bug表", []string{"标题", "严重级", "状态", "负责人", "发现版本", "需求ID"},
 			func(t *store.FeishuTables, id string) { t.Bugs = id }},
-		{"提测表", []string{"版本", "状态", "提测人", "测试负责人", "范围"},
+		{"提测表", []string{"版本", "状态", "提测人", "测试负责人", "范围", "需求ID"},
 			func(t *store.FeishuTables, id string) { t.TestSubmissions = id }},
 		{"发版表", []string{"版本", "状态", "发布负责人", "发布时间", "备注"},
 			func(t *store.FeishuTables, id string) { t.Releases = id }},

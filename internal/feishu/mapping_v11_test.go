@@ -68,34 +68,36 @@ func TestRequirementFieldsResolution(t *testing.T) {
 }
 
 func TestReviewFieldsRoundTripAndImmutableSemantics(t *testing.T) {
+	uidToID := map[string]int64{"aabbccdd00112233aabbccdd00112233": 7}
+	idToUID := map[int64]string{7: "aabbccdd00112233aabbccdd00112233"}
 	v := model.Review{Kind: "requirement", HeldAt: "2026-09-15 10:00:00",
 		Conclusion: "passed_with_notes", RequirementID: 7}
-	fields := ReviewToFields(v)
+	fields := ReviewToFields(v, idToUID)
 	wantDate := float64(time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC).UnixMilli())
 	if fields["评审类型"] != "requirement" || fields["结论"] != "passed_with_notes" ||
-		fields["评审时间"] != wantDate || fields["需求ID"] != "7" {
+		fields["评审时间"] != wantDate || fields["需求ID"] != "aabbccdd00112233aabbccdd00112233" {
 		t.Fatalf("评审字段不符: %+v (want 评审时间=%v)", fields, wantDate)
 	}
-	got, missing, warns := FieldsToReview(fields, model.Review{})
+	got, missing, warns := FieldsToReview(fields, model.Review{}, uidToID)
 	if len(missing) != 0 || len(warns) != 0 {
 		t.Fatalf("完整字段不应有缺失/告警: %v %v", missing, warns)
 	}
 	if got.HeldAt != "2026-09-15" { // 日期列只保留日期部分
 		t.Fatalf("HeldAt 应为日期形态: %q", got.HeldAt)
 	}
-	fields2 := ReviewToFields(got)
+	fields2 := ReviewToFields(got, idToUID)
 	if !reflect.DeepEqual(fields, fields2) {
 		t.Fatalf("往返不一致:\n got  %+v\n want %+v", fields2, fields)
 	}
 	// 无关联需求：需求ID 落空串
-	if ReviewToFields(model.Review{Kind: "test", Conclusion: "pending"})["需求ID"] != "" {
+	if ReviewToFields(model.Review{Kind: "test"}, idToUID)["需求ID"] != "" {
 		t.Fatal("无关联需求的需求ID 应为空串")
 	}
 	// 创建即定：base 已有 kind/held_at/需求ID 时保留本地值，远端不一致仅告警
 	base := model.Review{Kind: "release", HeldAt: "09-01", Conclusion: "pending", RequirementID: 2}
 	changed, _, warns := FieldsToReview(map[string]any{
-		"评审类型": "requirement", "结论": "rejected", "评审时间": "09-02", "需求ID": "5",
-	}, base)
+		"评审类型": "requirement", "结论": "rejected", "评审时间": "09-02", "需求ID": "aabbccdd00112233aabbccdd00112233",
+	}, base, uidToID)
 	if changed.Kind != "release" || changed.HeldAt != "09-01" || changed.RequirementID != 2 {
 		t.Fatalf("创建即定字段应保留本地值: %+v", changed)
 	}
@@ -103,7 +105,7 @@ func TestReviewFieldsRoundTripAndImmutableSemantics(t *testing.T) {
 		t.Fatalf("结论应合入且不一致字段应告警: %+v %v", changed, warns)
 	}
 	// 缺必填字段
-	_, missing, _ = FieldsToReview(map[string]any{"评审类型": "test"}, model.Review{})
+	_, missing, _ = FieldsToReview(map[string]any{"评审类型": "test"}, model.Review{}, nil)
 	if len(missing) != 1 || missing[0] != "结论" {
 		t.Fatalf("缺结论应报 missing: %v", missing)
 	}
@@ -142,34 +144,34 @@ func TestBugFieldsRoundTripAndResolution(t *testing.T) {
 	nameToID := map[string]int64{"tester": 3}
 	verNameToID := map[string]int64{"v1.0": 5}
 	b := model.Bug{Title: "登录崩溃", Severity: 1, Status: "fixing", AssigneeID: 3, FoundVersionID: 5}
-	fields := BugToFields(b, map[int64]string{3: "tester"}, map[int64]string{5: "v1.0"})
+	fields := BugToFields(b, map[int64]string{3: "tester"}, map[int64]string{5: "v1.0"}, nil)
 	if fields["标题"] != "登录崩溃" || fields["严重级"] != "1" || fields["状态"] != "fixing" ||
 		fields["负责人"] != "tester" || fields["发现版本"] != "v1.0" {
 		t.Fatalf("bug 字段不符: %+v", fields)
 	}
-	got, missing, warns := FieldsToBug(fields, model.Bug{}, nameToID, verNameToID)
+	got, missing, warns := FieldsToBug(fields, model.Bug{}, nameToID, verNameToID, nil)
 	if len(missing) != 0 || len(warns) != 0 {
 		t.Fatalf("完整字段不应有缺失/告警: %v %v", missing, warns)
 	}
-	if !reflect.DeepEqual(fields, BugToFields(got, map[int64]string{3: "tester"}, map[int64]string{5: "v1.0"})) {
-		t.Fatalf("往返不一致: %+v", BugToFields(got, map[int64]string{3: "tester"}, map[int64]string{5: "v1.0"}))
+	if !reflect.DeepEqual(fields, BugToFields(got, map[int64]string{3: "tester"}, map[int64]string{5: "v1.0"}, nil)) {
+		t.Fatalf("往返不一致: %+v", BugToFields(got, map[int64]string{3: "tester"}, map[int64]string{5: "v1.0"}, nil))
 	}
 	// 严重级非法：保留原值并告警
 	changed, _, warns := FieldsToBug(map[string]any{
 		"标题": "x", "严重级": "9", "状态": "open",
-	}, model.Bug{Severity: 3}, nil, nil)
+	}, model.Bug{Severity: 3}, nil, nil, nil)
 	if changed.Severity != 3 || len(warns) != 1 {
 		t.Fatalf("非法严重级应保留并告警: %+v %v", changed, warns)
 	}
 	// 发现版本不在本地：保留原版本并告警
 	changed, _, warns = FieldsToBug(map[string]any{
 		"标题": "x", "严重级": "2", "状态": "open", "发现版本": "v9",
-	}, model.Bug{FoundVersionID: 5}, nil, map[string]int64{"v1.0": 5})
+	}, model.Bug{FoundVersionID: 5}, nil, map[string]int64{"v1.0": 5}, nil)
 	if changed.FoundVersionID != 5 || len(warns) != 1 {
 		t.Fatalf("未知版本应保留并告警: %+v %v", changed, warns)
 	}
 	// 缺必填
-	_, missing, _ = FieldsToBug(map[string]any{"标题": "x", "严重级": "2"}, model.Bug{}, nil, nil)
+	_, missing, _ = FieldsToBug(map[string]any{"标题": "x", "严重级": "2"}, model.Bug{}, nil, nil, nil)
 	if len(missing) != 1 || missing[0] != "状态" {
 		t.Fatalf("缺状态应报 missing: %v", missing)
 	}
@@ -182,33 +184,33 @@ func TestSubmissionFieldsRoundTripAndResolution(t *testing.T) {
 	verNameToID := map[string]int64{"v1.0": 5}
 	sub := model.TestSubmission{VersionID: 5, Status: "submitted", SubmittedBy: 3,
 		TestOwnerID: 4, Scope: "核心路径"}
-	fields := SubmissionToFields(sub, idToName, verIDToName)
+	fields := SubmissionToFields(sub, idToName, verIDToName, nil)
 	if fields["版本"] != "v1.0" || fields["状态"] != "submitted" || fields["提测人"] != "tester" ||
 		fields["测试负责人"] != "qa" || fields["范围"] != "核心路径" {
 		t.Fatalf("提测字段不符: %+v", fields)
 	}
-	got, missing, warns := FieldsToSubmission(fields, model.TestSubmission{}, nameToID, verNameToID)
+	got, missing, warns := FieldsToSubmission(fields, model.TestSubmission{}, nameToID, verNameToID, nil)
 	if len(missing) != 0 || len(warns) != 0 {
 		t.Fatalf("完整字段不应有缺失/告警: %v %v", missing, warns)
 	}
-	if !reflect.DeepEqual(fields, SubmissionToFields(got, idToName, verIDToName)) {
-		t.Fatalf("往返不一致: %+v", SubmissionToFields(got, idToName, verIDToName))
+	if !reflect.DeepEqual(fields, SubmissionToFields(got, idToName, verIDToName, nil)) {
+		t.Fatalf("往返不一致: %+v", SubmissionToFields(got, idToName, verIDToName, nil))
 	}
 	// 测试负责人为空（键存在但值为空）→ 0；键缺失则保留本地（Bitable 清列形态）
 	changed, _, _ := FieldsToSubmission(map[string]any{
 		"版本": "v1.0", "状态": "testing", "提测人": "tester", "测试负责人": "",
-	}, model.TestSubmission{TestOwnerID: 4}, nameToID, verNameToID)
+	}, model.TestSubmission{TestOwnerID: 4}, nameToID, verNameToID, nil)
 	if changed.TestOwnerID != 0 || changed.Status != "testing" {
 		t.Fatalf("空测试负责人应清空: %+v", changed)
 	}
 	changed, _, _ = FieldsToSubmission(map[string]any{
 		"版本": "v1.0", "状态": "testing", "提测人": "tester",
-	}, model.TestSubmission{TestOwnerID: 4}, nameToID, verNameToID)
+	}, model.TestSubmission{TestOwnerID: 4}, nameToID, verNameToID, nil)
 	if changed.TestOwnerID != 4 {
 		t.Fatalf("键缺失应保留本地测试负责人: %+v", changed)
 	}
 	// 缺必填
-	_, missing, _ = FieldsToSubmission(map[string]any{"状态": "draft"}, model.TestSubmission{}, nil, nil)
+	_, missing, _ = FieldsToSubmission(map[string]any{"状态": "draft"}, model.TestSubmission{}, nil, nil, nil)
 	if len(missing) != 1 || missing[0] != "版本" {
 		t.Fatalf("缺版本应报 missing: %v", missing)
 	}
@@ -277,7 +279,7 @@ func TestEntityFieldsIgnoreUpdatedBy(t *testing.T) {
 }
 
 func reviewWarns() []string {
-	_, _, w := FieldsToReview(map[string]any{"评审类型": "test", "结论": "pending", "updated_by": true}, model.Review{})
+	_, _, w := FieldsToReview(map[string]any{"评审类型": "test", "结论": "pending", "updated_by": true}, model.Review{}, nil)
 	return w
 }
 func meetingWarns() []string {
@@ -285,11 +287,11 @@ func meetingWarns() []string {
 	return w
 }
 func bugWarns() []string {
-	_, _, w := FieldsToBug(map[string]any{"标题": "x", "严重级": "1", "状态": "open", "updated_by": true}, model.Bug{}, nil, nil)
+	_, _, w := FieldsToBug(map[string]any{"标题": "x", "严重级": "1", "状态": "open", "updated_by": true}, model.Bug{}, nil, nil, nil)
 	return w
 }
 func submissionWarns() []string {
-	_, _, w := FieldsToSubmission(map[string]any{"版本": "v", "状态": "draft", "updated_by": true}, model.TestSubmission{}, nil, nil)
+	_, _, w := FieldsToSubmission(map[string]any{"版本": "v", "状态": "draft", "updated_by": true}, model.TestSubmission{}, nil, nil, nil)
 	return w
 }
 func releaseWarns() []string {

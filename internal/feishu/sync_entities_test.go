@@ -79,7 +79,7 @@ func TestSyncRequirementPushCreatesRecordAndBackfills(t *testing.T) {
 	}
 	want := ContentHash(RequirementToFields(model.Requirement{
 		Title: "导出报表", Description: "支持 CSV 导出", Status: "proposed",
-		Priority: 2, OwnerID: 1,
+		Priority: 2, OwnerID: 1, UID: r.UID,
 	}, map[int64]string{1: "tester"}))
 	if r.BitableSyncedHash != want {
 		t.Fatalf("synced_hash = %s, want %s", r.BitableSyncedHash, want)
@@ -522,7 +522,7 @@ func TestSyncSubmissionRemoteStatusFlow(t *testing.T) {
 	// 远端流转到 testing
 	remote := SubmissionToFields(model.TestSubmission{
 		VersionID: vs[0].ID, Status: "testing", SubmittedBy: actor.ID, Scope: "核心路径",
-	}, map[int64]string{actor.ID: "tester"}, map[int64]string{vs[0].ID: "v1.0"})
+	}, map[int64]string{actor.ID: "tester"}, map[int64]string{vs[0].ID: "v1.0"}, nil)
 	fake.searchByTable = searchScript("tblSubmit", taskRecord("rec1", time.Now().Unix()+10, remote))
 
 	res, err := SyncProject(ctx, clientWith(fake), s, p, actor)
@@ -565,7 +565,7 @@ func TestSyncSubmissionReusesPendingRecord(t *testing.T) {
 	}
 	remote := SubmissionToFields(model.TestSubmission{
 		VersionID: vs[0].ID, Status: "draft", SubmittedBy: actor.ID,
-	}, map[int64]string{actor.ID: "tester"}, map[int64]string{vs[0].ID: "v1.0"})
+	}, map[int64]string{actor.ID: "tester"}, map[int64]string{vs[0].ID: "v1.0"}, nil)
 	fake := &fakeAPI{searchByTable: searchScript("tblSubmit", taskRecord("recX", 3000, remote))}
 
 	res, err := SyncProject(context.Background(), clientWith(fake), s, p, actor)

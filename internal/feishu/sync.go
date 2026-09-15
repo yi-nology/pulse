@@ -87,6 +87,7 @@ func SyncProject(ctx context.Context, c *Client, s *store.Store, p model.Project
 		ctx: ctx, api: c.API(), s: s, p: p, actor: actor, res: &res,
 		idToName: map[int64]string{}, nameToID: map[string]int64{},
 		verIDToName: map[int64]string{}, verNameToID: map[string]int64{},
+		reqIDToUID: map[int64]string{}, reqUIDToID: map[string]int64{},
 		entityAncestors: map[string]map[int64]string{},
 	}
 	if err := ss.loadMaps(); err != nil {
@@ -153,6 +154,10 @@ type syncSession struct {
 	nameToID    map[string]int64
 	verIDToName map[int64]string
 	verNameToID map[string]int64
+	// 需求全局身份（UID）双向映射（v1.2）：评审/bug/提测 的 需求ID 列跨机按 UID
+	// 传递，本地 id ↔ UID 在合入过程中会增长（需求 pull/create/list 回填时刷新）。
+	reqIDToUID map[int64]string
+	reqUIDToID map[string]int64
 
 	taskAncestor    map[int64]string // 本轮 push 前的 synced_hash 快照（LWW 共同基线）
 	versionAncestor map[int64]string
@@ -199,6 +204,19 @@ func (ss *syncSession) loadMaps() error {
 	for _, v := range versions {
 		ss.verIDToName[v.ID] = v.Name
 		ss.verNameToID[v.Name] = v.ID
+	}
+	// 需求全局身份映射：评审/bug/提测 的 需求ID 列按 UID 解析（v1.2）。
+	// uid 为空的旧库行由需求适配器的 list 回填后补进映射。
+	reqs, err := ss.s.ListRequirements(ss.p.ID, "")
+	if err != nil {
+		return fmt.Errorf("加载需求失败: %w", err)
+	}
+	for _, r := range reqs {
+		if r.UID == "" {
+			continue
+		}
+		ss.reqIDToUID[r.ID] = r.UID
+		ss.reqUIDToID[r.UID] = r.ID
 	}
 	return nil
 }

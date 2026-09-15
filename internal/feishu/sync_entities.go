@@ -290,10 +290,48 @@ func pullEntity[T any](ss *syncSession, def entityDef[T], tableID string) error 
 
 // —— 六实体适配器（依赖序：需求先于评审合入；版本先于提测/发版由外层 pullVersions 保证）——
 
+// ensureLocalRequirementRef 校验需求引用在本项目内存在；不存在（含跨机撞号落在其它
+// 项目）时置空并告警（外键拒绝悬空引用，评审/bug/提测 的建行与更新路径共用）。
+func (ss *syncSession) ensureLocalRequirementRef(label string, ref *int64) {
+	if *ref == 0 {
+		return
+	}
+	req, found, err := ss.s.GetRequirement(*ref)
+	if err != nil || !found || req.ProjectID != ss.p.ID {
+		ss.warn("%s引用的需求 #%d 不在本地，已置空关联", label, *ref)
+		*ref = 0
+	}
+}
+
 func requirementDef() entityDef[model.Requirement] {
 	return entityDef[model.Requirement]{
 		entity: "requirement", table: "requirements", label: "需求",
-		list: func(ss *syncSession) ([]model.Requirement, error) { return ss.s.ListRequirements(ss.p.ID, "") },
+		list: func(ss *syncSession) ([]model.Requirement, error) {
+			rs, err := ss.s.ListRequirements(ss.p.ID, "")
+			if err != nil {
+				return nil, err
+			}
+			// UID 回填挂点（v1.2）：list 是祖先快照/push/pull 共同的行入口，旧库行
+			//（uid=''）在此一次性回填，保证 toFields/引用解析都拿得到 UID；幂等，
+			// 写库失败仅告警（本行按空 UID 推送，下轮重试）。比挂在 toFields 干净：
+			// toFields 还被远端哈希重算/超时核对等纯哈希路径调用，不宜有写副作用。
+			for i := range rs {
+				if rs[i].UID != "" {
+					continue
+				}
+				uid, err := ss.s.EnsureRequirementUID(rs[i].ID)
+				if err != nil {
+					ss.warn("回填需求 %d 的需求UID失败: %v", rs[i].ID, err)
+					continue
+				}
+				rs[i].UID = uid
+				ss.reqIDToUID[rs[i].ID] = uid
+				if _, dup := ss.reqUIDToID[uid]; !dup {
+					ss.reqUIDToID[uid] = rs[i].ID
+				}
+			}
+			return rs, nil
+		},
 		meta: func(r model.Requirement) entityRow {
 			return entityRow{id: r.ID, recordID: r.BitableRecordID, syncedHash: r.BitableSyncedHash,
 				syncedAt: r.SyncedAt, archived: r.Archived}
@@ -306,13 +344,24 @@ func requirementDef() entityDef[model.Requirement] {
 		},
 		newBase: func(ss *syncSession) model.Requirement { return model.Requirement{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, r model.Requirement) (model.Requirement, error) {
-			return ss.s.CreateRequirement(r, ss.actor, nil)
+			created, err := ss.s.CreateRequirement(r, ss.actor, nil)
+			if err != nil {
+				return created, err
+			}
+			// 需求映射表必须随合入刷新：同轮后续评审/bug/提测记录的需求ID 列要能解析到它
+			//（同 verIDToName 的既修模式）
+			if created.UID != "" {
+				ss.reqIDToUID[created.ID] = created.UID
+				ss.reqUIDToID[created.UID] = created.ID
+			}
+			return created, nil
 		},
 		applyRemote: func(ss *syncSession, id int64, r model.Requirement) (model.Requirement, error) {
 			priority := int64(r.Priority)
+			// UID 随远端合入（采纳语义）：双机各自生成的行随共享记录收敛为同一全局身份
 			return ss.s.UpdateRequirement(id, store.RequirementChanges{
 				Title: &r.Title, Description: &r.Description, Status: &r.Status,
-				OwnerID: &r.OwnerID, Priority: &priority,
+				OwnerID: &r.OwnerID, Priority: &priority, UID: &r.UID,
 			}, ss.actor, nil)
 		},
 		softDelete: func(ss *syncSession, id int64) error {
@@ -333,21 +382,16 @@ func reviewDef() entityDef[model.Review] {
 			return entityRow{id: v.ID, recordID: v.BitableRecordID, syncedHash: v.BitableSyncedHash,
 				syncedAt: v.SyncedAt, archived: v.Archived}
 		},
-		toFields: func(ss *syncSession, v model.Review) map[string]any { return ReviewToFields(v) },
+		toFields: func(ss *syncSession, v model.Review) map[string]any {
+			return ReviewToFields(v, ss.reqIDToUID)
+		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.Review) (model.Review, []string, []string) {
-			return FieldsToReview(f, local)
+			return FieldsToReview(f, local, ss.reqUIDToID)
 		},
 		newBase: func(ss *syncSession) model.Review { return model.Review{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, v model.Review) (model.Review, error) {
-			// 需求ID 是本地引用：本地不存在、或存在但属于其它项目（跨机 ID 撞号）时
-			// 置空并告警（外键拒绝悬空引用；语义对齐任务表"版本不在本地保留原值"的容错）
-			if v.RequirementID != 0 {
-				req, found, err := ss.s.GetRequirement(v.RequirementID)
-				if err != nil || !found || req.ProjectID != ss.p.ID {
-					ss.warn("评审引用的需求 #%d 不在本地，已置空关联", v.RequirementID)
-					v.RequirementID = 0
-				}
-			}
+			// 需求ID（UID 解析/legacy 数字串的结果）是本地引用：不在本地时置空（外键安全）
+			ss.ensureLocalRequirementRef("评审", &v.RequirementID)
 			return ss.s.CreateReview(v, ss.actor, nil)
 		},
 		applyRemote: func(ss *syncSession, id int64, v model.Review) (model.Review, error) {
@@ -395,20 +439,25 @@ func bugDef() entityDef[model.Bug] {
 				syncedAt: b.SyncedAt, archived: b.Archived}
 		},
 		toFields: func(ss *syncSession, b model.Bug) map[string]any {
-			return BugToFields(b, ss.idToName, ss.verIDToName)
+			return BugToFields(b, ss.idToName, ss.verIDToName, ss.reqIDToUID)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.Bug) (model.Bug, []string, []string) {
-			return FieldsToBug(f, local, ss.nameToID, ss.verNameToID)
+			return FieldsToBug(f, local, ss.nameToID, ss.verNameToID, ss.reqUIDToID)
 		},
 		newBase: func(ss *syncSession) model.Bug { return model.Bug{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, b model.Bug) (model.Bug, error) {
+			// 需求ID（UID 解析/legacy 数字串的结果）不在本地时置空（外键安全，同评审）
+			ss.ensureLocalRequirementRef("bug", &b.RequirementID)
 			return ss.s.CreateBug(b, ss.actor, nil)
 		},
 		applyRemote: func(ss *syncSession, id int64, b model.Bug) (model.Bug, error) {
 			severity := int64(b.Severity)
+			// 需求ID 可随远端更新（UpdateBug 有通道）：不在本地时置空（外键安全）
+			ss.ensureLocalRequirementRef("bug", &b.RequirementID)
 			return ss.s.UpdateBug(id, store.BugChanges{
 				Title: &b.Title, Status: &b.Status, Severity: &severity,
 				AssigneeID: &b.AssigneeID, FoundVersionID: &b.FoundVersionID,
+				RequirementID: &b.RequirementID,
 			}, ss.actor, nil)
 		},
 		softDelete: func(ss *syncSession, id int64) error {
@@ -432,15 +481,17 @@ func submissionDef() entityDef[model.TestSubmission] {
 				syncedAt: t.SyncedAt, archived: t.Archived}
 		},
 		toFields: func(ss *syncSession, t model.TestSubmission) map[string]any {
-			return SubmissionToFields(t, ss.idToName, ss.verIDToName)
+			return SubmissionToFields(t, ss.idToName, ss.verIDToName, ss.reqIDToUID)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.TestSubmission) (model.TestSubmission, []string, []string) {
-			return FieldsToSubmission(f, local, ss.nameToID, ss.verNameToID)
+			return FieldsToSubmission(f, local, ss.nameToID, ss.verNameToID, ss.reqUIDToID)
 		},
 		newBase: func(ss *syncSession) model.TestSubmission { return model.TestSubmission{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, t model.TestSubmission) (model.TestSubmission, error) {
 			// version_id 非空且外键约束：远端版本名未解析时建行失败，告警并压住水位，
-			// 待版本表（先行拉取）补齐后下轮自动重试
+			// 待版本表（先行拉取）补齐后下轮自动重试；需求ID（UID 解析/legacy 结果）
+			// 不在本地时置空（外键安全，同评审）
+			ss.ensureLocalRequirementRef("提测单", &t.RequirementID)
 			return ss.s.CreateTestSubmission(t, ss.actor, nil)
 		},
 		applyRemote: func(ss *syncSession, id int64, t model.TestSubmission) (model.TestSubmission, error) {

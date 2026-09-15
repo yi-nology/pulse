@@ -61,6 +61,7 @@ type Requirement struct {
 	Priority             int
 	OwnerID              int64 // 0 = 无人
 	Source               string
+	UID                  string // 全局身份（32 位十六进制，创建时生成；跨机引用按它解析，修复本地 id 撞号错链）
 	FeishuDocToken       string
 	BitableRecordID      string
 	BitableSyncedHash    string

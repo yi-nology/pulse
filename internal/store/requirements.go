@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,13 +20,14 @@ var validRequirementStatuses = map[string]bool{
 
 // RequirementChanges UpdateRequirement 的增量变更集；nil 指针 = 不修改该字段。
 // OwnerID 指向 0 表示清空（落 NULL）。FeishuDocToken 供文档绑定写回（Task 3）。
+// UID 供同步 pull 侧采纳远端全局身份（双机各自生成的行随共享记录收敛为同一 UID）。
 type RequirementChanges struct {
-	Title, Description, Status, Source, FeishuDocToken *string
-	OwnerID, Priority                                  *int64
+	Title, Description, Status, Source, FeishuDocToken, UID *string
+	OwnerID, Priority                                       *int64
 }
 
 const requirementCols = `id, project_id, title, description, status, priority, owner_id,
-	source, feishu_doc_token, bitable_record_id, bitable_synced_hash, synced_at, archived,
+	source, uid, feishu_doc_token, bitable_record_id, bitable_synced_hash, synced_at, archived,
 	created_at, updated_at`
 
 // scanRequirement 从一行结果扫描出 model.Requirement（owner_id 可空，NULL 映射 0）。
@@ -33,7 +36,7 @@ func scanRequirement(scan func(dest ...any) error) (model.Requirement, error) {
 	var ownerID sql.NullInt64
 	var archived int
 	if err := scan(&r.ID, &r.ProjectID, &r.Title, &r.Description, &r.Status, &r.Priority,
-		&ownerID, &r.Source, &r.FeishuDocToken, &r.BitableRecordID, &r.BitableSyncedHash,
+		&ownerID, &r.Source, &r.UID, &r.FeishuDocToken, &r.BitableRecordID, &r.BitableSyncedHash,
 		&r.SyncedAt, &archived, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return model.Requirement{}, err
 	}
@@ -42,8 +45,19 @@ func scanRequirement(scan func(dest ...any) error) (model.Requirement, error) {
 	return r, nil
 }
 
+// newRequirementUID 生成需求全局身份：crypto/rand 16 字节的十六进制（32 字符）。
+// 随 Bitable 需求表同步，跨机引用（评审/bug/提测 的 需求ID 列）按它解析。
+func newRequirementUID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("read random for requirement uid: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // CreateRequirement 创建需求并落 create 活动（与写入同一事务）；status 留空补 proposed，
-// priority 为 0 补缺省 3，status 非法时报错。
+// priority 为 0 补缺省 3，status 非法时报错。UID 留空时自动生成（pull 合入远端行时
+// 携带的 UID 原样保留——全局身份以共享记录为准，重新生成会破坏跨机对齐）。
 func (s *Store) CreateRequirement(r model.Requirement, actor model.Member, behalf *model.Member) (model.Requirement, error) {
 	status := r.Status
 	if status == "" {
@@ -56,15 +70,22 @@ func (s *Store) CreateRequirement(r model.Requirement, actor model.Member, behal
 	if priority == 0 {
 		priority = 3
 	}
+	uid := r.UID
+	if uid == "" {
+		var err error
+		if uid, err = newRequirementUID(); err != nil {
+			return model.Requirement{}, fmt.Errorf("生成需求UID: %w", err)
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return model.Requirement{}, fmt.Errorf("begin create requirement: %w", err)
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`INSERT INTO requirements
-		(project_id, title, description, status, priority, owner_id, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		r.ProjectID, r.Title, r.Description, status, priority, nullID(r.OwnerID), r.Source)
+		(project_id, title, description, status, priority, owner_id, source, uid)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ProjectID, r.Title, r.Description, status, priority, nullID(r.OwnerID), r.Source, uid)
 	if err != nil {
 		return model.Requirement{}, fmt.Errorf("insert requirement %q: %w", r.Title, err)
 	}
@@ -179,6 +200,11 @@ func (s *Store) UpdateRequirement(id int64, ch RequirementChanges, actor model.M
 		args = append(args, *ch.Source)
 		change("source", "update", old.Source, *ch.Source)
 	}
+	if ch.UID != nil && *ch.UID != old.UID {
+		sets = append(sets, "uid = ?")
+		args = append(args, *ch.UID)
+		change("uid", "update", old.UID, *ch.UID)
+	}
 	if ch.FeishuDocToken != nil && *ch.FeishuDocToken != old.FeishuDocToken {
 		sets = append(sets, "feishu_doc_token = ?")
 		args = append(args, *ch.FeishuDocToken)
@@ -203,4 +229,51 @@ func (s *Store) UpdateRequirement(id int64, ch RequirementChanges, actor model.M
 	}
 	r, _, err := s.GetRequirement(id)
 	return r, err
+}
+
+// GetRequirementIDByUID 在项目内按全局 UID 查需求 id（跨机引用解析用：评审/bug/提测
+// 的 Bitable 需求ID 列存的是 UID，pull 侧据此还原本地引用）；不存在时 found=false。
+func (s *Store) GetRequirementIDByUID(projectID int64, uid string) (int64, bool, error) {
+	if uid == "" {
+		return 0, false, nil
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM requirements WHERE project_id = ? AND uid = ?`, projectID, uid).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("get requirement by uid %q: %w", uid, err)
+	}
+	return id, true, nil
+}
+
+// EnsureRequirementUID 为旧库行（uid=”，v1.2 升级前创建）一次性回填全局 UID，幂等：
+// 已有 UID 原样返回、不重新生成；需求不存在时报错。同步路径在推送/拉取前调用，
+// 保证旧行首个同步轮次即带上 UID（唯一索引冲突在随机 128 位下概率可忽略）。
+// 元数据回填不落活动（避免 activity 噪音）。
+func (s *Store) EnsureRequirementUID(id int64) (string, error) {
+	var uid string
+	err := s.db.QueryRow(`SELECT uid FROM requirements WHERE id = ?`, id).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("需求不存在: id=%d", id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("load requirement id=%d: %w", id, err)
+	}
+	if uid != "" {
+		return uid, nil
+	}
+	if uid, err = newRequirementUID(); err != nil {
+		return "", fmt.Errorf("生成需求UID: %w", err)
+	}
+	res, err := s.db.Exec(`UPDATE requirements SET uid = ? WHERE id = ? AND uid = ''`, uid, id)
+	if err != nil {
+		return "", fmt.Errorf("backfill requirement uid id=%d: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		// 并发下他人已回填：以库内现值为准
+		return s.EnsureRequirementUID(id)
+	}
+	return uid, nil
 }

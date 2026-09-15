@@ -6,6 +6,8 @@
 //   - updated_by 列 bind 时创建但不参与同步（不计入指纹），远端出现时静默忽略；
 //   - 人员列（负责人/提测人/测试负责人/发布负责人）按成员名解析，查不到保留原值并告警
 //     （sync 侧已对远端提到的人名先行 get-or-create）；版本列（发现版本/版本）按版本名解析；
+//   - 需求引用列（评审/bug/提测 的 需求ID）存需求的**全局 UID**（v1.2）：pull 侧按
+//     UID 解析回本地 id，旧 base 的本地 id 数字串容忍解析一次并告警迁移；
 //   - 评审的 评审类型/评审时间/需求ID、会议的 会议标题/时间、发版的 发布时间 为
 //     "创建即定"字段：store 无对应更新路径，base 已有值时保留本地值、远端不一致仅告警；
 //     base 为零值（合入全新远端行）时采用远端值。
@@ -21,8 +23,10 @@ import (
 // —— 需求 ————————————————————————————————————————————————————————————————
 
 // RequirementToFields 把本地需求映射为 Bitable 字段（与 bind 建表列对应）。
+// 需求UID 是全局身份（v1.2）：随记录同步，跨机引用按它解析；空值省略键
+// （旧库行由同步路径回填后再推送）。
 func RequirementToFields(r model.Requirement, memberNameByID map[int64]string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"需求名": r.Title,
 		"状态":  r.Status,
 		"负责人": memberNameByID[r.OwnerID],
@@ -30,16 +34,22 @@ func RequirementToFields(r model.Requirement, memberNameByID map[int64]string) m
 		"描述":  r.Description,
 		"已废弃": r.Archived,
 	}
+	if r.UID != "" {
+		fields["需求UID"] = r.UID
+	}
+	return fields
 }
 
 var requirementRequiredFields = []string{"需求名", "状态", "优先级"}
 
 var requirementFieldSet = map[string]bool{
 	"需求名": true, "状态": true, "负责人": true, "优先级": true, "描述": true, "已废弃": true,
+	"需求UID": true,
 }
 
 // FieldsToRequirement 把远端字段映射到本地需求的变更（local 提供未映射字段的底值，
-// 如 Source 本地独有、Archived 不被远端内容覆盖）。
+// 如 Source 本地独有、Archived 不被远端内容覆盖）。需求UID 非空时随远端合入
+// （双机各自生成的行随共享记录收敛为同一全局身份），键缺失/为空时保留本地值。
 func FieldsToRequirement(f map[string]any, local model.Requirement, memberIDByName map[string]int64) (changed model.Requirement, missing []string, warnings []string) {
 	changed = local
 	for _, k := range requirementRequiredFields {
@@ -52,6 +62,11 @@ func FieldsToRequirement(f map[string]any, local model.Requirement, memberIDByNa
 	}
 	changed.Title = toText(f["需求名"])
 	changed.Status = toText(f["状态"])
+	if v, ok := f["需求UID"]; ok {
+		if uid := toText(v); uid != "" {
+			changed.UID = uid
+		}
+	}
 	if v, ok := f["负责人"]; ok {
 		name := toText(v)
 		if name == "" {
@@ -78,17 +93,13 @@ func FieldsToRequirement(f map[string]any, local model.Requirement, memberIDByNa
 
 // —— 评审 ————————————————————————————————————————————————————————————————
 
-// ReviewToFields 把本地评审映射为 Bitable 字段；需求ID 列是本地需求 id 的文本
-// （跨机不联动解析，合入时本地不存在该需求则置空，见 sync 侧适配器）。
-func ReviewToFields(v model.Review) map[string]any {
-	reqRef := ""
-	if v.RequirementID > 0 {
-		reqRef = strconv.FormatInt(v.RequirementID, 10)
-	}
+// ReviewToFields 把本地评审映射为 Bitable 字段；需求ID 列内容是需求的**全局 UID**
+// （v1.2 起修复跨机错链：本地自增 id 只在本机唯一，双机各自建需求会撞号）。
+func ReviewToFields(v model.Review, reqIDToUID map[int64]string) map[string]any {
 	fields := map[string]any{
 		"评审类型": v.Kind,
 		"结论":   v.Conclusion,
-		"需求ID": reqRef,
+		"需求ID": reqIDToUID[v.RequirementID],
 		"已废弃":  v.Archived,
 	}
 	if c := dateToCell(v.HeldAt); c != nil {
@@ -104,8 +115,10 @@ var reviewFieldSet = map[string]bool{
 }
 
 // FieldsToReview 把远端字段映射到本地评审的变更；仅 结论 可远端合入（sync 侧经
-// UpdateReviewConclusion 落库并落活动），评审类型/评审时间/需求ID 创建即定。
-func FieldsToReview(f map[string]any, local model.Review) (changed model.Review, missing []string, warnings []string) {
+// UpdateReviewConclusion 落库并落 update 活动），评审类型/评审时间/需求ID 创建即定。
+// 需求ID 列按全局 UID 解析回本地 id（旧 base 的数字串容忍解析一次并告警迁移），
+// 查不到时保留本地关联并告警。
+func FieldsToReview(f map[string]any, local model.Review, reqUIDToID map[string]int64) (changed model.Review, missing []string, warnings []string) {
 	changed = local
 	for _, k := range reviewRequiredFields {
 		if _, ok := f[k]; !ok {
@@ -126,10 +139,10 @@ func FieldsToReview(f map[string]any, local model.Review) (changed model.Review,
 			} else {
 				warnings = append(warnings, "远端需求ID 为空，保留本地关联")
 			}
-		} else if rid, err := strconv.ParseInt(text, 10, 64); err == nil {
-			changed.RequirementID = adoptImmutableID(local.RequirementID, rid, "需求ID", &warnings)
 		} else {
-			warnings = append(warnings, fmt.Sprintf("需求ID %q 无法解析为整数，保留原关联", text))
+			changed.RequirementID = adoptImmutableID(local.RequirementID,
+				resolveRequirementRef(text, local.RequirementID, reqUIDToID, &warnings),
+				"需求ID", &warnings)
 		}
 	}
 	warnings = append(warnings, unknownFieldWarnings(f, reviewFieldSet)...)
@@ -187,14 +200,16 @@ func FieldsToMeeting(f map[string]any, local model.Meeting) (changed model.Meeti
 
 // —— bug —————————————————————————————————————————————————————————————————
 
-// BugToFields 把本地 bug 映射为 Bitable 字段（严重级 1..4 落文本列）。
-func BugToFields(b model.Bug, memberNameByID, versionNameByID map[int64]string) map[string]any {
+// BugToFields 把本地 bug 映射为 Bitable 字段（严重级 1..4 落文本列；需求ID 列为
+// 需求的全局 UID，v1.2 起随记录同步）。
+func BugToFields(b model.Bug, memberNameByID, versionNameByID map[int64]string, reqIDToUID map[int64]string) map[string]any {
 	return map[string]any{
 		"标题":   b.Title,
 		"严重级":  strconv.Itoa(b.Severity),
 		"状态":   b.Status,
 		"负责人":  memberNameByID[b.AssigneeID],
 		"发现版本": versionNameByID[b.FoundVersionID],
+		"需求ID": reqIDToUID[b.RequirementID],
 		"已废弃":  b.Archived,
 	}
 }
@@ -203,11 +218,13 @@ var bugRequiredFields = []string{"标题", "严重级", "状态"}
 
 var bugFieldSet = map[string]bool{
 	"标题": true, "严重级": true, "状态": true, "负责人": true, "发现版本": true, "已废弃": true,
+	"需求ID": true,
 }
 
-// FieldsToBug 把远端字段映射到本地 bug 的变更（Description/RequirementID/FixTaskID
-// 本地独有，不被远端内容覆盖）。
-func FieldsToBug(f map[string]any, local model.Bug, memberIDByName, versionIDByName map[string]int64) (changed model.Bug, missing []string, warnings []string) {
+// FieldsToBug 把远端字段映射到本地 bug 的变更（Description/FixTaskID 本地独有，不被
+// 远端内容覆盖）。需求ID 列按全局 UID 解析（bug 的需求引用可随远端更新，
+// store 的 UpdateBug 有对应通道）；查不到保留本地关联并告警。
+func FieldsToBug(f map[string]any, local model.Bug, memberIDByName, versionIDByName map[string]int64, reqUIDToID map[string]int64) (changed model.Bug, missing []string, warnings []string) {
 	changed = local
 	for _, k := range bugRequiredFields {
 		if _, ok := f[k]; !ok {
@@ -246,20 +263,33 @@ func FieldsToBug(f map[string]any, local model.Bug, memberIDByName, versionIDByN
 			warnings = append(warnings, fmt.Sprintf("版本 %q 不在本地版本表，保留原版本", vname))
 		}
 	}
+	if v, ok := f["需求ID"]; ok {
+		text := toText(v)
+		if text == "" {
+			if local.RequirementID == 0 {
+				changed.RequirementID = 0
+			} else {
+				warnings = append(warnings, "远端需求ID 为空，保留本地关联")
+			}
+		} else {
+			changed.RequirementID = resolveRequirementRef(text, local.RequirementID, reqUIDToID, &warnings)
+		}
+	}
 	warnings = append(warnings, unknownFieldWarnings(f, bugFieldSet)...)
 	return changed, nil, warnings
 }
 
 // —— 提测单 ————————————————————————————————————————————————————————————————
 
-// SubmissionToFields 把本地提测单映射为 Bitable 字段。
-func SubmissionToFields(t model.TestSubmission, memberNameByID, versionNameByID map[int64]string) map[string]any {
+// SubmissionToFields 把本地提测单映射为 Bitable 字段（需求ID 列为需求的全局 UID）。
+func SubmissionToFields(t model.TestSubmission, memberNameByID, versionNameByID map[int64]string, reqIDToUID map[int64]string) map[string]any {
 	return map[string]any{
 		"版本":    versionNameByID[t.VersionID],
 		"状态":    t.Status,
 		"提测人":   memberNameByID[t.SubmittedBy],
 		"测试负责人": memberNameByID[t.TestOwnerID],
 		"范围":    t.Scope,
+		"需求ID":  reqIDToUID[t.RequirementID],
 		"已废弃":   t.Archived,
 	}
 }
@@ -268,11 +298,13 @@ var submissionRequiredFields = []string{"版本", "状态"}
 
 var submissionFieldSet = map[string]bool{
 	"版本": true, "状态": true, "提测人": true, "测试负责人": true, "范围": true, "已废弃": true,
+	"需求ID": true,
 }
 
-// FieldsToSubmission 把远端字段映射到本地提测单的变更（RequirementID 本地独有；
-// submitted_at/concluded_at 为 store 派生值，不随远端内容覆盖）。
-func FieldsToSubmission(f map[string]any, local model.TestSubmission, memberIDByName, versionIDByName map[string]int64) (changed model.TestSubmission, missing []string, warnings []string) {
+// FieldsToSubmission 把远端字段映射到本地提测单的变更（需求ID 创建即定——store 无对应
+// 更新通道，base 已有值时保留本地、远端不一致仅告警；submitted_at/concluded_at 为
+// store 派生值，不随远端内容覆盖）。需求ID 列按全局 UID 解析回本地 id。
+func FieldsToSubmission(f map[string]any, local model.TestSubmission, memberIDByName, versionIDByName map[string]int64, reqUIDToID map[string]int64) (changed model.TestSubmission, missing []string, warnings []string) {
 	changed = local
 	for _, k := range submissionRequiredFields {
 		if _, ok := f[k]; !ok {
@@ -297,6 +329,20 @@ func FieldsToSubmission(f map[string]any, local model.TestSubmission, memberIDBy
 	changed.TestOwnerID = resolveMemberFromField(f, "测试负责人", local.TestOwnerID, memberIDByName, &warnings)
 	if v, ok := f["范围"]; ok {
 		changed.Scope = toText(v)
+	}
+	if v, ok := f["需求ID"]; ok {
+		text := toText(v)
+		if text == "" {
+			if local.RequirementID == 0 {
+				changed.RequirementID = 0
+			} else {
+				warnings = append(warnings, "远端需求ID 为空，保留本地关联")
+			}
+		} else {
+			changed.RequirementID = adoptImmutableID(local.RequirementID,
+				resolveRequirementRef(text, local.RequirementID, reqUIDToID, &warnings),
+				"需求ID", &warnings)
+		}
 	}
 	warnings = append(warnings, unknownFieldWarnings(f, submissionFieldSet)...)
 	return changed, nil, warnings
@@ -360,6 +406,22 @@ func FieldsToRelease(f map[string]any, local model.Release, memberIDByName, vers
 }
 
 // —— 共用小工具 ————————————————————————————————————————————————————————————
+
+// resolveRequirementRef 把远端 需求ID 列文本解析回本地需求 id（v1.2 全局身份）：
+// 优先按需求UID 解析（32 位十六进制，跨机唯一）；未命中且为纯数字时按旧版本地 id
+// 容忍解析一次并告警提示迁移（push 以 UID 覆盖后一轮收敛）；两者皆不中时保留原
+// 关联并告警（对齐"版本不在本地"的容错风格）。
+func resolveRequirementRef(text string, local int64, reqUIDToID map[string]int64, warnings *[]string) int64 {
+	if id, ok := reqUIDToID[text]; ok {
+		return id
+	}
+	if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+		*warnings = append(*warnings, fmt.Sprintf("需求ID %q 为旧本地 id 格式，已按本地 id 解析（同步一轮后将迁移为需求UID）", text))
+		return n
+	}
+	*warnings = append(*warnings, fmt.Sprintf("需求ID %q 不在本地需求表（既非需求UID也非本地id），保留原关联", text))
+	return local
+}
 
 // adoptImmutable 是"创建即定"文本字段的合入规则：base 为空（合入全新远端行）时采用
 // 远端值；base 已有值时保留本地值，远端给出不同值仅告警（store 无该字段的更新路径）。

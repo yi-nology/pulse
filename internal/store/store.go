@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS requirements (
   priority INTEGER NOT NULL DEFAULT 3,
   owner_id INTEGER REFERENCES members(id),
   source TEXT NOT NULL DEFAULT '',
+  uid TEXT NOT NULL DEFAULT '',
   feishu_doc_token TEXT NOT NULL DEFAULT '',
   bitable_record_id TEXT NOT NULL DEFAULT '',
   bitable_synced_hash TEXT NOT NULL DEFAULT '',
@@ -103,6 +104,9 @@ CREATE TABLE IF NOT EXISTS requirements (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
 );
+-- 需求全局身份（v1.2）：部分唯一索引只约束非空 uid——旧库行（uid=''）在首轮同步时
+-- 经 EnsureRequirementUID 回填，迁移期允许多行空值共存。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_requirements_uid ON requirements(uid) WHERE uid != '';
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -242,6 +246,16 @@ func (s *Store) migrate() error {
 			!strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate add members.%s: %w", col, err)
 		}
+	}
+	// 既有库升级：为 requirements 补 uid（v1.2 需求全局身份：Bitable 跨机引用按 UID
+	// 解析，修复双机各自建需求撞号导致的错链）。新建库 schema 已含该列，ALTER 报
+	// duplicate column 属预期；旧行 uid 为空，由同步路径 EnsureRequirementUID 回填。
+	if _, err := s.db.Exec(`ALTER TABLE requirements ADD COLUMN uid TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate add requirements.uid: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_requirements_uid ON requirements(uid) WHERE uid != ''`); err != nil {
+		return fmt.Errorf("migrate create idx_requirements_uid: %w", err)
 	}
 	return nil
 }
