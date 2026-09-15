@@ -217,9 +217,7 @@ func pullEntity[T any](ss *syncSession, def entityDef[T], tableID string) error 
 			ss.warn("跳过%s记录 %s: 缺字段 %v", def.label, rec.RecordID, missing)
 			continue
 		}
-		for _, w := range warns {
-			ss.warn("%s记录 %s: %s", def.label, rec.RecordID, w)
-		}
+		// warns 延迟到回声判定之后才输出：回声命中的记录（内容与本地一致）不该刷"创建即定保留本地"类噪音
 		remoteFields := def.toFields(ss, changed)
 		remoteHash := ContentHash(remoteFields)
 		if !found {
@@ -235,6 +233,9 @@ func pullEntity[T any](ss *syncSession, def entityDef[T], tableID string) error 
 				failures.note(rec.LastModifiedTime)
 				continue
 			}
+			for _, w := range warns {
+				ss.warn("%s记录 %s: %s", def.label, rec.RecordID, w)
+			}
 			ss.res.Pulled++
 			continue
 		}
@@ -243,6 +244,9 @@ func pullEntity[T any](ss *syncSession, def entityDef[T], tableID string) error 
 			ss.entityAncestors[def.entity][lm.id], lm.id, remoteHash, remoteFields); echo {
 			ss.res.SkippedEcho++
 			continue
+		}
+		for _, w := range warns {
+			ss.warn("%s记录 %s: %s", def.label, rec.RecordID, w)
 		}
 		if def.applyRemote != nil {
 			updated, err := def.applyRemote(ss, lm.id, changed)
