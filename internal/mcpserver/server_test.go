@@ -537,6 +537,7 @@ func TestToolDescriptions(t *testing.T) {
 		"create_test_submission": false, "update_test_submission": false, "list_test_submissions": false,
 		"create_release": false, "update_release": false, "list_releases": false,
 		"create_review": false, "list_reviews": false, "list_meetings": false,
+		"conclude_review": false, "create_meeting": false,
 	}
 	for _, tl := range lt.Tools {
 		seen, known := want[tl.Name]

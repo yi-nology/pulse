@@ -1,15 +1,15 @@
-// tools_v11.go 注册 v1.1 研发交付闭环的 15 个 MCP 工具（spec §3.1-3.2，plan Task 4）：
+// tools_v11.go 注册 v1.1 研发交付闭环的 MCP 工具（spec §3.1-3.2，plan Task 4）：
 //
 //	requirement: create_requirement / update_requirement / list_requirements
 //	bug:         create_bug / update_bug / list_bugs
 //	test_submissions: create_test_submission / update_test_submission / list_test_submissions
 //	release:     create_release / update_release / list_releases
-//	review:      create_review / list_reviews
-//	meeting:     list_meetings（会议登记走 CLI/记录文档，MCP 只读）
+//	review:      create_review / conclude_review / list_reviews
+//	meeting:     create_meeting / list_meetings
 //
 // 沿用 server.go 的全部约定：requiredDesc 句式、jsonText 两空格缩进 JSON、
 // actor.resolve 的 delegated_by 归因（写工具全部支持）、写后 AutopushFunc 尽力同步。
-// 参数语义与 CLI（internal/cli/{requirement,bug,review,submission,release}.go）对齐：
+// 参数语义与 CLI（internal/cli/{requirement,bug,review,meeting,submission,release}.go）对齐：
 // 状态枚举在工具层先做中文校验，引用（需求/版本/成员）不存在时报中文错误。
 package mcpserver
 
@@ -68,6 +68,16 @@ func checkReviewConclusion(v string) error {
 		}
 	}
 	return fmt.Errorf("conclusion 必须为 pending|passed|passed_with_notes|rejected，收到 %q", v)
+}
+
+// checkReviewConcludeConclusion conclude_review 的结论枚举：给出结论不允许回退 pending。
+func checkReviewConcludeConclusion(v string) error {
+	for _, s := range []string{"passed", "passed_with_notes", "rejected"} {
+		if s == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("conclusion 必须为 passed|passed_with_notes|rejected，收到 %q", v)
 }
 
 // checkSubmissionUpdateStatus draft 仅创建缺省，不作为更新目标（CLI submit update 同语义）。
@@ -134,8 +144,12 @@ func RegisterDeliveryLoopTools(srv *mcp.Server, c *core) {
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "create_review",
 		Description: "记录一次评审（kind 必填，conclusion 缺省 pending）。" + requiredDesc}, c.createReview)
+	mcp.AddTool(srv, &mcp.Tool{Name: "conclude_review",
+		Description: "给评审下结论（conclusion 必填且不允许回退 pending，记 update 活动）。" + requiredDesc}, c.concludeReview)
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_reviews",
 		Description: "按项目列出评审记录，支持按关联需求过滤。" + requiredDesc}, c.listReviews)
+	mcp.AddTool(srv, &mcp.Tool{Name: "create_meeting",
+		Description: "登记会议记录（held_at 由 store 落当前时刻，纪要在飞书文档协作维护）。" + requiredDesc}, c.createMeeting)
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_meetings",
 		Description: "按项目列出会议记录。" + requiredDesc}, c.listMeetings)
 }
@@ -244,6 +258,20 @@ type listReviewsIn struct {
 
 type listMeetingsIn struct {
 	Project string `json:"project" jsonschema:"项目 key（必填）"`
+}
+
+// concludeReviewIn 评审"先记后结"：review_id + conclusion 必填（给出结论不允许回退
+// pending），delegated_by 归因可选；落库走 UpdateReviewConclusion（update 活动由 store 记）。
+type concludeReviewIn struct {
+	ReviewID    int64  `json:"review_id" jsonschema:"评审 ID（必填，先 list_reviews 确认）"`
+	Conclusion  string `json:"conclusion" jsonschema:"passed|passed_with_notes|rejected（必填）"`
+	DelegatedBy string `json:"delegated_by,omitempty" jsonschema:"agent 代表执行的人类成员名"`
+}
+
+type createMeetingIn struct {
+	Project     string `json:"project" jsonschema:"项目 key（必填）"`
+	Title       string `json:"title" jsonschema:"会议标题（必填）"`
+	DelegatedBy string `json:"delegated_by,omitempty" jsonschema:"agent 代表执行的人类成员名"`
 }
 
 // ---- 工具实现 ----
@@ -634,6 +662,46 @@ func (c *core) listReviews(_ context.Context, _ *mcp.CallToolRequest, in listRev
 		vs = []model.Review{}
 	}
 	return jsonText(vs)
+}
+
+// concludeReview 评审下结论（先记后结的"结"）：落库走 UpdateReviewConclusion，
+// 结论变更由 store 记 update 活动并刷新 updated_at；写后 autopush。
+func (c *core) concludeReview(_ context.Context, _ *mcp.CallToolRequest, in concludeReviewIn) (*mcp.CallToolResult, any, error) {
+	if err := checkReviewConcludeConclusion(in.Conclusion); err != nil {
+		return nil, nil, err
+	}
+	a, behalf, err := c.resolve(in.DelegatedBy)
+	if err != nil {
+		return nil, nil, err
+	}
+	updated, err := c.st.UpdateReviewConclusion(in.ReviewID, in.Conclusion, a, behalf)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.autopushProject(updated.ProjectID)
+	return jsonText(updated)
+}
+
+// createMeeting 登记会议记录：held_at 留空由 store 落当前时刻，created_by 归操作者；
+// 纪要正文在飞书文档协作维护（create 活动由 store 落库），写后 autopush。
+func (c *core) createMeeting(_ context.Context, _ *mcp.CallToolRequest, in createMeetingIn) (*mcp.CallToolResult, any, error) {
+	p, err := c.project(in.Project)
+	if err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return nil, nil, errors.New("必须提供 title")
+	}
+	a, behalf, err := c.resolve(in.DelegatedBy)
+	if err != nil {
+		return nil, nil, err
+	}
+	m, err := c.st.CreateMeeting(model.Meeting{ProjectID: p.ID, Title: in.Title}, a, behalf)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.autopushKey(p.Key)
+	return jsonText(m)
 }
 
 func (c *core) listMeetings(_ context.Context, _ *mcp.CallToolRequest, in listMeetingsIn) (*mcp.CallToolResult, any, error) {

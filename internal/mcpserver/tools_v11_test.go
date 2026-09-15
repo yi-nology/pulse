@@ -365,6 +365,89 @@ func TestDeliveryLoopReviewAndMeetings(t *testing.T) {
 	}
 }
 
+// TestConcludeReviewAndCreateMeeting 评审"先记后结"与会议登记的 MCP 工具：
+// conclude_review（review_id + conclusion 必填，delegated_by 归因）与 create_meeting
+// （project + title 必填，held_at 由 store 落当前时刻），写后 autopush 同其余写工具。
+func TestConcludeReviewAndCreateMeeting(t *testing.T) {
+	s := testEnv(t)
+	p := requireProject(t, s, "demo")
+	sc := connect(t, s, "claude")
+
+	rv := decode(t, callTool(t, sc, "create_review",
+		map[string]any{"project": "demo", "kind": "requirement"}))
+
+	// conclusion 必填 + 枚举校验（conclude 不接受回退 pending）+ 未知评审
+	if msg := callToolErr(t, sc, "conclude_review", map[string]any{"review_id": rv["ID"]}); msg == "" {
+		t.Fatal("缺 conclusion 须以 isError 失败")
+	}
+	if msg := callToolErr(t, sc, "conclude_review",
+		map[string]any{"review_id": rv["ID"], "conclusion": "pending"}); !strings.Contains(msg, "conclusion 必须为 passed|passed_with_notes|rejected") {
+		t.Fatalf("conclude 为 pending 须报错: %s", msg)
+	}
+	if msg := callToolErr(t, sc, "conclude_review",
+		map[string]any{"review_id": rv["ID"], "conclusion": "maybe"}); !strings.Contains(msg, "conclusion 必须为 passed|passed_with_notes|rejected") {
+		t.Fatalf("非法 conclusion 须报错: %s", msg)
+	}
+	if msg := callToolErr(t, sc, "conclude_review",
+		map[string]any{"review_id": 999, "conclusion": "passed"}); !strings.Contains(msg, "评审不存在") {
+		t.Fatalf("未知评审须报错: %s", msg)
+	}
+
+	// happy path：下结论 + delegated_by 归因（actor=agent，on_behalf_of=zhang）
+	done := decode(t, callTool(t, sc, "conclude_review", map[string]any{
+		"review_id": rv["ID"], "conclusion": "passed_with_notes", "delegated_by": "zhang"}))
+	if done["Conclusion"] != "passed_with_notes" {
+		t.Fatalf("conclude_review 结果不符: %s", string(mustJSON(done)))
+	}
+	agent := memberByName(t, s, "claude")
+	zhang := memberByName(t, s, "zhang")
+	var sawConclude bool
+	for _, a := range activities(t, s, p.ID) {
+		if a.EntityType == "review" && a.Action == "update" && a.EntityID == int64(rv["ID"].(float64)) {
+			if a.ActorID != agent.ID || a.OnBehalfOf != zhang.ID {
+				t.Fatalf("conclude 活动 actor=%d behalf=%d, want agent %d on behalf of %d",
+					a.ActorID, a.OnBehalfOf, agent.ID, zhang.ID)
+			}
+			if !strings.Contains(a.Detail, `"conclusion"`) {
+				t.Fatalf("conclude 活动明细应记 conclusion 字段: %q", a.Detail)
+			}
+			sawConclude = true
+		}
+	}
+	if !sawConclude {
+		t.Fatalf("conclude_review 的 update 活动缺失: %+v", activities(t, s, p.ID))
+	}
+
+	// create_meeting：held_at 落当前时刻、created_by 归操作者（agent）、create 活动归因
+	mt := decode(t, callTool(t, sc, "create_meeting", map[string]any{
+		"project": "demo", "title": "迭代评审会", "delegated_by": "zhang"}))
+	if mt["Title"] != "迭代评审会" || mt["HeldAt"] == "" {
+		t.Fatalf("create_meeting 结果不符: %s", string(mustJSON(mt)))
+	}
+	if mt["CreatedBy"] != float64(agent.ID) {
+		t.Fatalf("created_by = %v, want 操作者 agent %d", mt["CreatedBy"], agent.ID)
+	}
+	var sawMeeting bool
+	for _, a := range activities(t, s, p.ID) {
+		if a.EntityType == "meeting" && a.Action == "create" {
+			if a.ActorID != agent.ID || a.OnBehalfOf != zhang.ID {
+				t.Fatalf("meeting create 活动 actor=%d behalf=%d, want agent %d on behalf of %d",
+					a.ActorID, a.OnBehalfOf, agent.ID, zhang.ID)
+			}
+			sawMeeting = true
+		}
+	}
+	if !sawMeeting {
+		t.Fatalf("meeting create 活动缺失: %+v", activities(t, s, p.ID))
+	}
+	if got := decodeList(t, callTool(t, sc, "list_meetings", map[string]any{"project": "demo"})); len(got) != 1 {
+		t.Fatalf("list_meetings 须看到新会议: %s", string(mustJSON(got)))
+	}
+	if msg := callToolErr(t, sc, "create_meeting", map[string]any{"project": "demo"}); msg == "" {
+		t.Fatal("缺 title 须以 isError 失败（SDK schema 校验或工具校验）")
+	}
+}
+
 // TestDeliveryLoopEmptyListsStable 空列表输出必须是 []（稳定 JSON），而非 null。
 func TestDeliveryLoopEmptyListsStable(t *testing.T) {
 	s := testEnv(t)
