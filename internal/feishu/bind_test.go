@@ -55,6 +55,7 @@ var fakeTableIDs = map[string]string{
 	"任务表": "tblTask", "版本表": "tblVer",
 	"需求表": "tblReq", "评审表": "tblReview", "会议表": "tblMeeting",
 	"bug表": "tblBug", "提测表": "tblSubmit", "发版表": "tblRelease",
+	"成员表": "tblMembers",
 }
 
 func (f *fakeAPI) TableCreate(ctx context.Context, appToken, name string, fields []Field) (string, error) {
@@ -171,10 +172,10 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 		t.Fatalf("Bind: %v", err)
 	}
 
-	// 调用序列与参数：任务表→版本表→甘特视图→六实体表×6→沉淀文档
+	// 调用序列与参数：任务表→版本表→甘特视图→六实体表×6→成员表→沉淀文档
 	wantSeq := []string{"AppCreate", "TableCreate", "TableCreate", "ViewCreate",
 		"TableCreate", "TableCreate", "TableCreate", "TableCreate", "TableCreate", "TableCreate",
-		"DocCreate"}
+		"TableCreate", "DocCreate"}
 	if len(fake.calls) != len(wantSeq) {
 		t.Fatalf("调用数 = %d, want %d: %+v", len(fake.calls), len(wantSeq), fake.calls)
 	}
@@ -220,8 +221,8 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 		{Name: "优先级", Type: 3}, {Name: "描述", Type: 1},
 		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
 	})
-	// 文档建在根目录，标题含项目名
-	if got := fake.calls[10].args; got[0] != "" || !strings.Contains(got[1], "演示项目") {
+	// 文档建在根目录，标题含项目名（成员表之后：calls[11] = DocCreate）
+	if got := fake.calls[11].args; got[0] != "" || !strings.Contains(got[1], "演示项目") {
 		t.Fatalf("DocCreate 参数 = %+v, want 根目录 + 含项目名标题", got)
 	}
 
@@ -247,7 +248,8 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTables := store.FeishuTables{Requirements: "tblReq", Reviews: "tblReview",
-		Meetings: "tblMeeting", Bugs: "tblBug", TestSubmissions: "tblSubmit", Releases: "tblRelease"}
+		Meetings: "tblMeeting", Bugs: "tblBug", TestSubmissions: "tblSubmit", Releases: "tblRelease",
+		Members: "tblMembers"}
 	if tables != wantTables {
 		t.Fatalf("feishu_tables_json = %+v, want %+v", tables, wantTables)
 	}
@@ -295,8 +297,11 @@ func TestBindViewCreateFailureWarnsOnly(t *testing.T) {
 			t.Fatalf("调用[%d] = %s, want %s", i, fake.calls[i].method, m)
 		}
 	}
-	if fake.calls[10].method != "DocCreate" {
-		t.Fatalf("DocCreate 位置 = %s, want DocCreate（完整序列 %+v）", fake.calls[10].method, fake.calls)
+	if fake.calls[10].method != "TableCreate" || fake.calls[10].args[1] != "成员表" {
+		t.Fatalf("成员表位置 = %s/%s, want TableCreate/成员表（完整序列 %+v）", fake.calls[10].method, fake.calls[10].args[1], fake.calls)
+	}
+	if fake.calls[11].method != "DocCreate" {
+		t.Fatalf("DocCreate 位置 = %s, want DocCreate（完整序列 %+v）", fake.calls[11].method, fake.calls)
 	}
 	if !strings.Contains(warn.String(), "甘特") {
 		t.Fatalf("警告应提及甘特视图, got %q", warn.String())

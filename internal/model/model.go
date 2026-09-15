@@ -7,6 +7,9 @@ type Member struct {
 	Capacity  float64
 	Notes     string
 	CreatedAt string
+	// 飞书成员表单向镜像元数据（真实源在本地的类型/容量，飞书侧只读查看）
+	BitableRecordID   string
+	BitableSyncedHash string
 }
 
 type Project struct {

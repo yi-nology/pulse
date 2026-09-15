@@ -35,10 +35,10 @@ func (s *Store) SetSyncState(key, val string) error {
 
 // syncedAtStamp 返回该实体表需要附加的 ", synced_at = ?" 子句与取值（now UTC，与
 // activitiesLayout 的落库文本格式一致）。synced_at 记录本行上次与飞书收敛的时刻，
-// 是 sync 覆盖警告（E2E-3）的判定基准；版本表无该列（返回空，警告仅对有列实体适用），
-// 任务表与 v1.1 六实体表均有。
+// 是 sync 覆盖警告（E2E-3）的判定基准；版本表与成员表无该列（返回空，警告仅对有列
+// 实体适用——成员表是单向镜像，无 pull 覆盖语义），任务表与 v1.1 六实体表均有。
 func syncedAtStamp(entity string) (string, []any) {
-	if entity == "version" {
+	if entity == "version" || entity == "member" {
 		return "", nil
 	}
 	return ", synced_at = ?", []any{time.Now().UTC().Format(activitiesLayout)}
@@ -104,6 +104,8 @@ func syncEntityTable(entity string) (string, error) {
 		return "test_submissions", nil
 	case "release":
 		return "releases", nil
+	case "member":
+		return "members", nil
 	default:
 		return "", fmt.Errorf("markSynced: 未知实体 %q", entity)
 	}

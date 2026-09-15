@@ -82,3 +82,9 @@
 - 版本规划报表已发布到新沉淀文档 `REDACTED_DOC_TOKEN`。
 - 用法：`pulse version add/update`（或 MCP）→ `pulse sync` → 飞书版本表实时进度；`pulse feishu publish --report versions` 沉淀规划文档。甘特视图"分组→版本"即为按版本的排期视图。
 - 已知噪音：网络抖动会让 records/search 首拉偶发超时（重试即好）；发版表旧 base 403 待手动删。
+
+## REAL-3（真 bug，已修复）：版本进度列引发每轮重复推送/拉取
+
+- 现象：加入版本进度列后，每次 sync 恒定"已推送 2、拉取 2"（v0.9/v1.0 永动重推重拉）。
+- 根因：pull 合并分支的远端哈希用 `versionFields(changed)`，而 `changed`（FieldsToVersion 产物）无 ID → 进度统计按 `version_id=0` 查询恒为 0 → 远端哈希 ≠ 本地推哈希 → 永不回声、每轮误判变更。P2 哈希 4d2cf7 即"零进度哈希"。
+- 修复：合并分支进度按 `local.ID` 计算（sync.go，`VersionProgress(ss.p.ID, local.ID)`）。验证：连续三轮 sync = 推 2（写入正确进度）→ 0 → 0，全回声稳定。

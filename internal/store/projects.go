@@ -107,6 +107,7 @@ type FeishuTables struct {
 	Bugs            string `json:"bugs"`
 	TestSubmissions string `json:"test_submissions"`
 	Releases        string `json:"releases"`
+	Members         string `json:"members"` // 成员表（单向镜像：pulse → 飞书，供人查看名单与容量）
 }
 
 // GetFeishuTables 读取项目的六实体表 id；值为空（旧项目）返回零值且不报错。

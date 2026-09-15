@@ -19,11 +19,11 @@ func SetWarnWriter(w io.Writer) { warnWriter = w }
 
 // 飞书多维表格字段类型编号（api.go Field.Type）。
 const (
-	fieldTypeText        = 1 // 文本
-	fieldTypeNumber      = 2 // 数字
+	fieldTypeText         = 1 // 文本
+	fieldTypeNumber       = 2 // 数字
 	fieldTypeSingleSelect = 3 // 单选
-	fieldTypeDate        = 5 // 日期
-	fieldTypeCheckbox    = 7 // 复选框
+	fieldTypeDate         = 5 // 日期
+	fieldTypeCheckbox     = 7 // 复选框
 )
 
 // taskTableFields / versionTableFields 是 bind 建表用的字段定义。
@@ -57,6 +57,17 @@ func versionTableFields() []Field {
 		{Name: "已完成", Type: fieldTypeNumber},
 		{Name: "逾期", Type: fieldTypeNumber},
 		{Name: "完成度", Type: fieldTypeNumber},
+	}
+}
+
+// memberTableFields 是成员表（单向镜像）的建表字段：名单与周容量供人在飞书侧
+// 查看；维护（增删改成员/容量）走 CLI/MCP，飞书侧修改不回流。
+func memberTableFields() []Field {
+	return []Field{
+		{Name: "姓名", Type: fieldTypeText},
+		{Name: "类型", Type: fieldTypeSingleSelect}, // human | agent
+		{Name: "周容量人日", Type: fieldTypeNumber},
+		{Name: "备注", Type: fieldTypeText},
 	}
 }
 
@@ -154,6 +165,12 @@ func Bind(ctx context.Context, c *Client, s *store.Store, p model.Project) (mode
 		}
 		def.set(&tables, tableID)
 	}
+	// 成员表（单向镜像）：名单与容量供人在飞书侧查看；维护仍走 CLI/MCP。
+	memberTableID, err := api.TableCreate(ctx, appToken, "成员表", memberTableFields())
+	if err != nil {
+		return model.Project{}, fmt.Errorf("创建成员表失败: %w", err)
+	}
+	tables.Members = memberTableID
 	docToken, err := api.DocCreate(ctx, "", p.Name+" 沉淀文档")
 	if err != nil {
 		return model.Project{}, fmt.Errorf("创建沉淀文档失败: %w", err)

@@ -167,8 +167,8 @@ func TestFeishuBindCreatesBaseEndToEnd(t *testing.T) {
 	if n := appN.Load(); n != 1 {
 		t.Fatalf("AppCreate 次数 = %d, want 1", n)
 	}
-	if n := tableN.Load(); n != 8 { // 任务表+版本表+v1.1 六实体表
-		t.Fatalf("TableCreate 次数 = %d, want 8", n)
+	if n := tableN.Load(); n != 9 { // 任务表+版本表+v1.1 六实体表+成员表
+		t.Fatalf("TableCreate 次数 = %d, want 9", n)
 	}
 	if n := viewN.Load(); n != 1 {
 		t.Fatalf("ViewCreate 次数 = %d, want 1", n)

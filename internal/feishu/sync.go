@@ -109,6 +109,11 @@ func SyncProject(ctx context.Context, c *Client, s *store.Store, p model.Project
 	if err := ss.pushVersions(); err != nil {
 		return res, err
 	}
+	if tables.Members != "" { // 成员表单向镜像：未配置（旧项目）时跳过
+		if err := ss.pushMembers(tables.Members); err != nil {
+			return res, err
+		}
+	}
 	if err := ss.pushTasks(); err != nil {
 		return res, err
 	}
@@ -343,6 +348,40 @@ func (ss *syncSession) pushVersions() error {
 	return nil
 }
 
+// pushMembers 把成员镜像推送到飞书"成员表"（单向：pulse → 飞书）。名单与容量供人
+// 查看；成员维护走 CLI/MCP，飞书侧修改不回流。成员无软删语义、低频变更，按内容
+// 指纹判脏（首次全量建行，其后仅变更行 PUT）。
+func (ss *syncSession) pushMembers(membersTableID string) error {
+	members, err := ss.s.ListMembers()
+	if err != nil {
+		return fmt.Errorf("加载成员失败: %w", err)
+	}
+	for _, m := range members {
+		fields := MemberToFields(m)
+		hash := ContentHash(fields)
+		if hash == m.BitableSyncedHash {
+			continue // 与上次同步一致，免调用
+		}
+		recID := m.BitableRecordID
+		if recID == "" {
+			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, membersTableID, fields)
+			if err != nil {
+				ss.warn("推送成员 %s 失败（本地变更已保留，恢复后可补推）: %v", m.Name, err)
+				continue
+			}
+		} else if err = ss.api.RecordUpdate(ss.ctx, ss.p.FeishuBitableAppToken, membersTableID, recID, fields); err != nil {
+			ss.warn("推送成员 %s 失败（本地变更已保留，恢复后可补推）: %v", m.Name, err)
+			continue
+		}
+		if err := MarkSyncedRecord(ss.s, "member", m.ID, recID, hash); err != nil {
+			ss.warn("回填成员 %s 的同步元数据失败: %v", m.Name, err)
+			continue
+		}
+		ss.res.Pushed++
+	}
+	return nil
+}
+
 // pushTasks 推送本地任务脏行；archived 行只推一次墓碑（已废弃=true），推完置
 // synced_hash=DeprecatedHash 终态，不再重推。
 func (ss *syncSession) pushTasks() error {
@@ -506,7 +545,13 @@ func (ss *syncSession) pullVersions() error {
 			ss.res.Pulled++
 			continue
 		}
-		remoteFields := ss.versionFields(changed)
+		// 进度列按本地行的 versionID 实时计算（changed 来自 FieldsToVersion 无 ID，
+		// 直接用会查到 version_id=0 的空统计，导致远端哈希恒不匹配、每轮误判变更）。
+		prog, progErr := ss.s.VersionProgress(ss.p.ID, local.ID)
+		if progErr != nil {
+			prog = store.VersionProgress{}
+		}
+		remoteFields := VersionToFields(changed, prog)
 		remoteHash := ContentHash(remoteFields)
 		if echo, _ := ss.lwwPlan("version", ss.versionFields(local), local.BitableSyncedHash,
 			ss.versionAncestor[local.ID], local.ID, remoteHash, remoteFields); echo {

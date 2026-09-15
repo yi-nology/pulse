@@ -236,6 +236,13 @@ func (s *Store) migrate() error {
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate add projects.feishu_tables_json: %w", err)
 	}
+	// 既有库升级：为 members 补同步镜像列（飞书成员表单向镜像，记录 id + 内容指纹）。
+	for _, col := range []string{"bitable_record_id", "bitable_synced_hash"} {
+		if _, err := s.db.Exec(`ALTER TABLE members ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migrate add members.%s: %w", col, err)
+		}
+	}
 	return nil
 }
 

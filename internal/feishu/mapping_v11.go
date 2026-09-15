@@ -138,6 +138,17 @@ func FieldsToReview(f map[string]any, local model.Review) (changed model.Review,
 
 // —— 会议 ————————————————————————————————————————————————————————————————
 
+// MemberToFields 把本地成员映射为飞书"成员表"字段（单向镜像：姓名/类型/周容量/备注；
+// 名单与容量供人在飞书侧查看，成员维护走 CLI/MCP，飞书侧修改不回流）。
+func MemberToFields(m model.Member) map[string]any {
+	return map[string]any{
+		"姓名":    m.Name,
+		"类型":    m.Type,
+		"周容量人日": m.Capacity,
+		"备注":    m.Notes,
+	}
+}
+
 // MeetingToFields 把本地会议映射为 Bitable 字段。
 func MeetingToFields(m model.Meeting) map[string]any {
 	fields := map[string]any{

@@ -12,9 +12,9 @@ import (
 func (s *Store) GetMemberByName(name string) (model.Member, bool, error) {
 	var m model.Member
 	err := s.db.QueryRow(
-		`SELECT id, name, type, capacity_days_per_week, notes, created_at FROM members WHERE name = ?`,
+		`SELECT id, name, type, capacity_days_per_week, notes, created_at, bitable_record_id, bitable_synced_hash FROM members WHERE name = ?`,
 		name,
-	).Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt)
+	).Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt, &m.BitableRecordID, &m.BitableSyncedHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Member{}, false, nil
 	}
@@ -32,9 +32,9 @@ func (s *Store) GetOrCreateMember(name, typ string) (model.Member, error) {
 	}
 	var m model.Member
 	err := s.db.QueryRow(
-		`SELECT id, name, type, capacity_days_per_week, notes, created_at FROM members WHERE name = ?`,
+		`SELECT id, name, type, capacity_days_per_week, notes, created_at, bitable_record_id, bitable_synced_hash FROM members WHERE name = ?`,
 		name,
-	).Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt)
+	).Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt, &m.BitableRecordID, &m.BitableSyncedHash)
 	if err != nil {
 		return model.Member{}, fmt.Errorf("select member %q: %w", name, err)
 	}
@@ -59,7 +59,7 @@ func (s *Store) SetMemberCapacity(id int64, capacity float64) error {
 // ListMembers 返回全部成员（按 id 升序）。
 func (s *Store) ListMembers() ([]model.Member, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, type, capacity_days_per_week, notes, created_at FROM members ORDER BY id`)
+		`SELECT id, name, type, capacity_days_per_week, notes, created_at, bitable_record_id, bitable_synced_hash FROM members ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
 	}
@@ -67,7 +67,7 @@ func (s *Store) ListMembers() ([]model.Member, error) {
 	var ms []model.Member
 	for rows.Next() {
 		var m model.Member
-		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt, &m.BitableRecordID, &m.BitableSyncedHash); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}
 		ms = append(ms, m)

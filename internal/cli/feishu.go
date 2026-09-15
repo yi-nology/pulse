@@ -36,7 +36,7 @@ func newFeishuCmd() *cobra.Command {
 // PULSE_FEISHU_ENDPOINT 环境变量可覆盖官方域名（测试注入 httptest 地址用）。
 func newFeishuBindCmd() *cobra.Command {
 	var projectKey, appToken, taskTable, versionTable, docToken string
-	var requirementsTable, reviewsTable, meetingsTable, bugsTable, submissionsTable, releasesTable string
+	var requirementsTable, reviewsTable, meetingsTable, bugsTable, submissionsTable, releasesTable, membersTable string
 	cmd := &cobra.Command{
 		Use:   "bind",
 		Short: "为项目创建（或采用既有）飞书同步 base 与沉淀文档，token 写回项目",
@@ -86,7 +86,7 @@ func newFeishuBindCmd() *cobra.Command {
 				// 六实体表 id（均可省）：合并写回 feishu_tables_json——指定的表覆盖，
 				// 未指定的表保留既有值（GetFeishuTables 对空 JSON 返回零值，即新建语义）
 				if requirementsTable != "" || reviewsTable != "" || meetingsTable != "" ||
-					bugsTable != "" || submissionsTable != "" || releasesTable != "" {
+					bugsTable != "" || submissionsTable != "" || releasesTable != "" || membersTable != "" {
 					tables, err := s.GetFeishuTables(p.ID)
 					if err != nil {
 						return err
@@ -108,6 +108,9 @@ func newFeishuBindCmd() *cobra.Command {
 					}
 					if releasesTable != "" {
 						tables.Releases = releasesTable
+					}
+					if membersTable != "" {
+						tables.Members = membersTable
 					}
 					if err := s.SaveFeishuTables(p.ID, tables); err != nil {
 						return err
@@ -139,10 +142,10 @@ func newFeishuBindCmd() *cobra.Command {
 			fmt.Fprintf(out, "其他机器共享提示: 执行 pulse feishu bind --project %s --app-token %s"+
 				" --task-table %s --version-table %s --doc %s"+
 				" --requirements-table %s --reviews-table %s --meetings-table %s"+
-				" --bugs-table %s --submissions-table %s --releases-table %s 可绑定同一 base\n",
+				" --bugs-table %s --submissions-table %s --releases-table %s --members-table %s 可绑定同一 base\n",
 				p.Key, p.FeishuBitableAppToken, p.FeishuTaskTableID, p.FeishuVersionTableID, p.FeishuDocToken,
 				tables.Requirements, tables.Reviews, tables.Meetings,
-				tables.Bugs, tables.TestSubmissions, tables.Releases)
+				tables.Bugs, tables.TestSubmissions, tables.Releases, tables.Members)
 			return nil
 		},
 	}
@@ -157,6 +160,7 @@ func newFeishuBindCmd() *cobra.Command {
 	cmd.Flags().StringVar(&bugsTable, "bugs-table", "", "既有 bug 表 table_id（采用模式可选，六实体同步用）")
 	cmd.Flags().StringVar(&submissionsTable, "submissions-table", "", "既有提测表 table_id（采用模式可选，六实体同步用）")
 	cmd.Flags().StringVar(&releasesTable, "releases-table", "", "既有发版表 table_id（采用模式可选，六实体同步用）")
+	cmd.Flags().StringVar(&membersTable, "members-table", "", "既有成员表 table_id（采用模式可选，成员镜像用）")
 	return cmd
 }
 
