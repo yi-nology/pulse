@@ -89,11 +89,13 @@ func checkReleaseStatus(v string) error {
 	return fmt.Errorf("status 必须为 preparing|testing|released|rolled_back，收到 %q", v)
 }
 
-// requireLinkedRequirement 关联需求引用校验（CLI 同文案）：须已存在。
-func (c *core) requireLinkedRequirement(id int64) error {
-	if _, found, err := c.st.GetRequirement(id); err != nil {
+// requireLinkedRequirement 关联需求引用校验（CLI 同文案）：须已存在且属于当前项目
+// （他项目内的同 id 按"不存在"拒绝，不泄露跨项目存在性）。
+func (c *core) requireLinkedRequirement(projectID, id int64) error {
+	req, found, err := c.st.GetRequirement(id)
+	if err != nil {
 		return err
-	} else if !found {
+	} else if !found || req.ProjectID != projectID {
 		return fmt.Errorf("需求不存在: id=%d", id)
 	}
 	return nil
@@ -364,7 +366,7 @@ func (c *core) createBug(_ context.Context, _ *mcp.CallToolRequest, in createBug
 		}
 	}
 	if in.RequirementID != nil && *in.RequirementID != 0 {
-		if err := c.requireLinkedRequirement(*in.RequirementID); err != nil {
+		if err := c.requireLinkedRequirement(p.ID, *in.RequirementID); err != nil {
 			return nil, nil, err
 		}
 		b.RequirementID = *in.RequirementID
@@ -461,7 +463,7 @@ func (c *core) createTestSubmission(_ context.Context, _ *mcp.CallToolRequest, i
 	}
 	t := model.TestSubmission{ProjectID: p.ID, VersionID: vid}
 	if in.RequirementID != nil && *in.RequirementID != 0 {
-		if err := c.requireLinkedRequirement(*in.RequirementID); err != nil {
+		if err := c.requireLinkedRequirement(p.ID, *in.RequirementID); err != nil {
 			return nil, nil, err
 		}
 		t.RequirementID = *in.RequirementID
@@ -602,7 +604,7 @@ func (c *core) createReview(_ context.Context, _ *mcp.CallToolRequest, in create
 	}
 	v := model.Review{ProjectID: p.ID, Kind: in.Kind, Conclusion: in.Conclusion}
 	if in.RequirementID != nil && *in.RequirementID != 0 {
-		if err := c.requireLinkedRequirement(*in.RequirementID); err != nil {
+		if err := c.requireLinkedRequirement(p.ID, *in.RequirementID); err != nil {
 			return nil, nil, err
 		}
 		v.RequirementID = *in.RequirementID

@@ -325,10 +325,11 @@ func reviewDef() entityDef[model.Review] {
 		},
 		newBase: func(ss *syncSession) model.Review { return model.Review{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, v model.Review) (model.Review, error) {
-			// 需求ID 是本地引用：本地不存在该需求时置空并告警（外键拒绝悬空引用；
-			// 跨机需求 ID 不联动，语义对齐任务表"版本不在本地保留原值"的容错）
+			// 需求ID 是本地引用：本地不存在、或存在但属于其它项目（跨机 ID 撞号）时
+			// 置空并告警（外键拒绝悬空引用；语义对齐任务表"版本不在本地保留原值"的容错）
 			if v.RequirementID != 0 {
-				if _, found, err := ss.s.GetRequirement(v.RequirementID); err != nil || !found {
+				req, found, err := ss.s.GetRequirement(v.RequirementID)
+				if err != nil || !found || req.ProjectID != ss.p.ID {
 					ss.warn("评审引用的需求 #%d 不在本地，已置空关联", v.RequirementID)
 					v.RequirementID = 0
 				}

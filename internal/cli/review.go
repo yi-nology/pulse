@@ -81,9 +81,11 @@ func newReviewRecordCmd() *cobra.Command {
 				return err
 			}
 			if cmd.Flags().Changed("requirement") && requirementID != 0 {
-				if _, found, err := s.GetRequirement(requirementID); err != nil {
+				// 守卫项目归属：他项目内的同 id 需求同样按不存在拒绝（不泄露存在性）
+				req, found, err := s.GetRequirement(requirementID)
+				if err != nil {
 					return err
-				} else if !found {
+				} else if !found || req.ProjectID != p.ID {
 					return fmt.Errorf("需求不存在: id=%d", requirementID)
 				}
 			}

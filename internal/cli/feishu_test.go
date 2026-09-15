@@ -78,9 +78,12 @@ func newFakeFeishu(t *testing.T) (appCreates, tableCreates, viewCreates, docCrea
 			respJSON(w, http.StatusOK, map[string]any{"code": 0})
 		case strings.HasSuffix(r.URL.Path, "/tables"):
 			n := tableN.Add(1)
-			id := "tblTask"
-			if n == 2 {
-				id = "tblVer"
+			// 建表序：任务表/版本表 + 六实体表（需求/评审/会议/bug/提测/发版），
+			// 与 feishu.Bind 的建表顺序一一对应。
+			ids := []string{"tblTask", "tblVer", "tblReq", "tblReview", "tblMeet", "tblBug", "tblSub", "tblRel"}
+			id := ids[0]
+			if int(n) <= len(ids) {
+				id = ids[n-1]
 			}
 			respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"table_id": id}})
 		default:
@@ -153,7 +156,10 @@ func TestFeishuBindCreatesBaseEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind failed: %v stderr=%s", err, errOut)
 	}
-	for _, want := range []string{"已绑定飞书", "appB", "tblTask", "tblVer", "docD", "--app-token appB"} {
+	for _, want := range []string{"已绑定飞书", "appB", "tblTask", "tblVer", "docD", "--app-token appB",
+		// 共享提示必须带全六实体表 id，机器 B 可整行复制到采用模式
+		"--requirements-table tblReq", "--reviews-table tblReview", "--meetings-table tblMeet",
+		"--bugs-table tblBug", "--submissions-table tblSub", "--releases-table tblRel"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout %q must contain %q", out, want)
 		}
@@ -236,6 +242,67 @@ func TestFeishuBindAdoptExistingBase(t *testing.T) {
 		t.Fatalf("采用 token 未写回: %+v", p)
 	}
 	requireActivity(t, s, p.ID, "feishu_bind", "project", "tester")
+}
+
+// TestFeishuBindAdoptEntityTables：采用模式的六个可选实体表旗标——传入的表 id 经
+// SaveFeishuTables 合并落 feishu_tables_json（指定表覆盖、未指定表保留既有值、
+// 空值时新建），零飞书调用。
+func TestFeishuBindAdoptEntityTables(t *testing.T) {
+	s, _ := feishuTestEnv(t)
+	p, err := s.CreateProject("demo", "演示", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appN, tableN, viewN, docN, _, _ := newFakeFeishu(t)
+
+	// 预置部分实体表 id：未传旗标的表必须保留既有值（合并而非整体覆盖）
+	if err := s.SaveFeishuTables(p.ID, store.FeishuTables{Requirements: "tblOldR", Releases: "tblOldL"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, err := runCLI(t, "feishu", "bind", "--project", "demo",
+		"--app-token", "appX", "--task-table", "t1", "--version-table", "t2", "--doc", "d1",
+		"--requirements-table", "tblR", "--bugs-table", "tblB")
+	if err != nil {
+		t.Fatalf("adopt bind failed: %v stderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "已绑定既有飞书 base") {
+		t.Fatalf("stdout %q must contain 已绑定既有飞书 base", out)
+	}
+	if appN.Load()+tableN.Load()+viewN.Load()+docN.Load() != 0 {
+		t.Fatal("采用模式合并实体表 id 不允许产生任何飞书调用")
+	}
+	tables, err := s.GetFeishuTables(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := store.FeishuTables{ // tblR/tblB 覆盖，tblOldL 保留；其余新建为零值
+		Requirements: "tblR", Bugs: "tblB", Releases: "tblOldL",
+	}
+	if tables != want {
+		t.Fatalf("feishu_tables_json 合并结果 = %+v, want %+v", tables, want)
+	}
+
+	// 空值新建：全新项目只传一个旗标也能落 JSON
+	if _, err := s.CreateProject("fresh", "新项目", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCLI(t, "feishu", "bind", "--project", "fresh",
+		"--app-token", "appY", "--task-table", "t1", "--version-table", "t2",
+		"--meetings-table", "tblM"); err != nil {
+		t.Fatalf("fresh adopt bind: %v", err)
+	}
+	fresh, found, err := s.GetProjectByKey("fresh")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	tables, err = s.GetFeishuTables(fresh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tables.Meetings != "tblM" || tables.Requirements != "" {
+		t.Fatalf("空值新建结果 = %+v, want 仅 Meetings=tblM", tables)
+	}
 }
 
 // TestFeishuPublishEndToEnd：bind 后 `pulse feishu publish` 完整走通——先静默同步

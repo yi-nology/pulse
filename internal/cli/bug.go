@@ -67,9 +67,11 @@ func newBugAddCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("需求 ID 须为整数，收到 %q", requirement)
 				}
-				if _, found, err := s.GetRequirement(rid); err != nil {
+				// 守卫项目归属：他项目内的同 id 需求同样按不存在拒绝（不泄露存在性）
+				req, found, err := s.GetRequirement(rid)
+				if err != nil {
 					return err
-				} else if !found {
+				} else if !found || req.ProjectID != p.ID {
 					return fmt.Errorf("需求不存在: id=%d", rid)
 				}
 				b.RequirementID = rid

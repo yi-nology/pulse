@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/zhangyi/pulse/internal/store"
 )
 
 func TestBugAddListUpdate(t *testing.T) {
@@ -74,6 +76,36 @@ func TestBugAddListUpdate(t *testing.T) {
 
 	if _, _, err = runCLI(t, "bug", "update", "1", "--severity", "9"); err == nil {
 		t.Fatal("severity 9 must fail")
+	}
+}
+
+// TestBugReferenceCrossProjectRefused：跨项目需求引用必须按"不存在"拒绝（守卫
+// ProjectID，不泄露其他项目内该 id 的存在性）。
+func TestBugReferenceCrossProjectRefused(t *testing.T) {
+	s, _, _ := testEnv(t)
+	if _, _, err := runCLI(t, "init", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCLI(t, "init", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCLI(t, "requirement", "add", "需求A", "--project", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, err := runCLI(t, "bug", "add", "x", "--project", "other", "--requirement", "1")
+	if err == nil || !strings.Contains(errOut, "需求不存在: id=1") {
+		t.Fatalf("跨项目需求引用必须报 需求不存在, err=%v stderr=%s", err, errOut)
+	}
+	other, found, err := s.GetProjectByKey("other")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	bs, err := s.ListBugs(other.ID, store.BugFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bs) != 0 {
+		t.Fatalf("失败路径不得创建 bug: %+v", bs)
 	}
 }
 

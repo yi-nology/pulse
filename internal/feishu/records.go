@@ -28,10 +28,9 @@ var errFeishuNotConfigured = errors.New("未配置飞书：请先在 $PULSE_HOME
 
 // recordDoc 是一次待创建文档的渲染结果；token 非空表示实体已绑定（无需创建）。
 type recordDoc struct {
-	projectID int64
-	title     string
-	blocks    []map[string]any
-	token     string
+	title  string
+	blocks []map[string]any
+	token  string
 }
 
 // EnsureRecordDoc 确保协作记录实体（requirement|review|meeting|test_submission|release）
@@ -84,7 +83,7 @@ func loadRecordDoc(s *store.Store, entityKind string, id int64) (recordDoc, bool
 		if err != nil {
 			return recordDoc{}, true, err
 		}
-		return recordDoc{projectID: r.ProjectID, title: "需求 · " + r.Title, blocks: blocks}, true, nil
+		return recordDoc{title: "需求 · " + r.Title, blocks: blocks}, true, nil
 	case "review":
 		v, found, err := s.GetReview(id)
 		if err != nil || !found {
@@ -93,7 +92,7 @@ func loadRecordDoc(s *store.Store, entityKind string, id int64) (recordDoc, bool
 		if v.FeishuDocToken != "" {
 			return recordDoc{token: v.FeishuDocToken}, true, nil
 		}
-		return recordDoc{projectID: v.ProjectID, title: reviewDocTitle(v), blocks: reviewDocBlocks(v)}, true, nil
+		return recordDoc{title: reviewDocTitle(v), blocks: reviewDocBlocks(v)}, true, nil
 	case "meeting":
 		m, found, err := s.GetMeeting(id)
 		if err != nil || !found {
@@ -102,7 +101,7 @@ func loadRecordDoc(s *store.Store, entityKind string, id int64) (recordDoc, bool
 		if m.FeishuDocToken != "" {
 			return recordDoc{token: m.FeishuDocToken}, true, nil
 		}
-		return recordDoc{projectID: m.ProjectID, title: "会议纪要 · " + m.Title, blocks: meetingDocBlocks(m)}, true, nil
+		return recordDoc{title: "会议纪要 · " + m.Title, blocks: meetingDocBlocks(m)}, true, nil
 	case "test_submission":
 		t, found, err := s.GetTestSubmission(id)
 		if err != nil || !found {
@@ -119,7 +118,7 @@ func loadRecordDoc(s *store.Store, entityKind string, id int64) (recordDoc, bool
 		if err != nil {
 			return recordDoc{}, true, err
 		}
-		return recordDoc{projectID: t.ProjectID, title: title, blocks: blocks}, true, nil
+		return recordDoc{title: title, blocks: blocks}, true, nil
 	case "release":
 		r, found, err := s.GetRelease(id)
 		if err != nil || !found {
@@ -136,7 +135,7 @@ func loadRecordDoc(s *store.Store, entityKind string, id int64) (recordDoc, bool
 		if err != nil {
 			return recordDoc{}, true, err
 		}
-		return recordDoc{projectID: r.ProjectID, title: title, blocks: releaseDocBlocks(names, r)}, true, nil
+		return recordDoc{title: title, blocks: releaseDocBlocks(names, r)}, true, nil
 	default:
 		return recordDoc{}, false, fmt.Errorf("未知实体类型 %q（须为 requirement|review|meeting|test_submission|release）", entityKind)
 	}
@@ -220,7 +219,7 @@ func requirementDocBlocks(s *store.Store, r model.Requirement) ([]map[string]any
 		bulletBlock("负责人：" + displayName(names, r.OwnerID)),
 		bulletBlock(fmt.Sprintf("优先级：%d", r.Priority)),
 		headingBlock("关联任务提示"),
-		bulletBlock("行动项请用 pulse task add --requirement"),
+		bulletBlock("行动项需跟踪时可用 pulse task add 建任务"),
 	}, nil
 }
 

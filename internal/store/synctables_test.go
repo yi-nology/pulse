@@ -43,6 +43,32 @@ func TestSaveAndGetFeishuTablesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGetFeishuTablesCorruptJSON：feishu_tables_json 被写坏（非 JSON 垃圾）时读路径
+// 必须报显式错误（与 projects.go 的 "feishu_tables_json 损坏" 文案一致），不得静默返回零值。
+func TestGetFeishuTablesCorruptJSON(t *testing.T) {
+	s := openTest(t)
+	p := seedProject(t, s)
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"纯文本垃圾", "not-json"},
+		{"截断对象", `{"requirements": "tbl`},
+		{"数字", "123"},
+		{"数组", "[1,2]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := s.db.Exec(`UPDATE projects SET feishu_tables_json = ? WHERE id = ?`, tc.raw, p.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.GetFeishuTables(p.ID); err == nil || !strings.Contains(err.Error(), "feishu_tables_json 损坏") {
+				t.Fatalf("垃圾值 %q 必须报损坏错误, got %v", tc.raw, err)
+			}
+		})
+	}
+}
+
 func TestGetFeishuTablesMissingProject(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.GetFeishuTables(999); err == nil {

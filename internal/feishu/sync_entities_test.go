@@ -701,6 +701,47 @@ func TestSyncReviewUnknownRequirementRefCleared(t *testing.T) {
 	}
 }
 
+// —— 评审：远端新行引用的本地 id 属于其它项目（跨机 ID 撞号）→ 按"不在本地"置空 ——
+
+func TestSyncReviewCrossProjectRequirementRefCleared(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	other, err := s.CreateProject("other", "其他项目", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherReq, err := s.CreateRequirement(model.Requirement{ProjectID: other.ID, Title: "别家的需求"}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAPI{searchByTable: searchScript("tblReview", taskRecord("recR", 2000, map[string]any{
+		"评审类型": "release", "结论": "passed", "评审时间": "2026-09-14 09:00:00",
+		"需求ID": fmt.Sprintf("%d", otherReq.ID),
+	}))}
+	res, err := SyncProject(context.Background(), clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if res.Pulled != 1 {
+		t.Fatalf("远端评审应合入: %+v", res)
+	}
+	rvs, err := s.ListReviews(p.ID, 0)
+	if err != nil || len(rvs) != 1 {
+		t.Fatalf("评审未合入: %+v err=%v", rvs, err)
+	}
+	if rvs[0].RequirementID != 0 {
+		t.Fatalf("跨项目需求引用应按不存在置空: %+v", rvs[0])
+	}
+	foundWarn := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, fmt.Sprintf("%d", otherReq.ID)) {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Fatalf("跨项目置空关联应告警: %#v", res.Warnings)
+	}
+}
+
 // —— 会议：create + 回声 + 墓碑（只读实体：远端内容修改被吸收，不重复告警）——————————
 
 func TestSyncMeetingCreateEchoTombstone(t *testing.T) {

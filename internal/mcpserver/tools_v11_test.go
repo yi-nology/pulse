@@ -181,6 +181,25 @@ func TestDeliveryLoopBugFlow(t *testing.T) {
 	}
 }
 
+// TestDeliveryLoopCrossProjectRequirementRefused：跨项目需求引用必须按"不存在"
+// 拒绝（requireLinkedRequirement 守卫 ProjectID，不泄露他项目内该 id 的存在性）。
+func TestDeliveryLoopCrossProjectRequirementRefused(t *testing.T) {
+	s := testEnv(t)
+	requireProject(t, s, "demo")
+	requireProject(t, s, "other")
+	sc := connect(t, s, "claude")
+
+	req := decode(t, callTool(t, sc, "create_requirement", map[string]any{"project": "demo", "title": "需求A"}))
+	msg := callToolErr(t, sc, "create_bug", map[string]any{
+		"project": "other", "title": "x", "requirement_id": req["ID"]})
+	if !strings.Contains(msg, "需求不存在") {
+		t.Fatalf("跨项目需求引用须报 需求不存在: %s", msg)
+	}
+	if got := decodeList(t, callTool(t, sc, "list_bugs", map[string]any{"project": "other"})); len(got) != 0 {
+		t.Fatalf("失败路径不得创建 bug: %s", string(mustJSON(got)))
+	}
+}
+
 // TestDeliveryLoopSubmissionReleaseFlow 提测/发版四工具：版本必填、状态流转自动
 // 补记时间戳、delegated_by 归因到 update_status 活动、draft 不可作为更新目标。
 func TestDeliveryLoopSubmissionReleaseFlow(t *testing.T) {

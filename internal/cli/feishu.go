@@ -23,15 +23,20 @@ func newFeishuCmd() *cobra.Command {
 // newFeishuBindCmd 实现 `pulse feishu bind --project demo [--app-token X --task-table Y --version-table Z --doc W]`。
 //
 // 两种模式：
-//   - 创建模式（默认）：经 feishu.Bind 新建 base（任务表+版本表+甘特视图）与沉淀文档并写回 token；
-//     幂等——项目已有 bitable_app_token 时直接提示已绑定，不产生任何调用。
+//   - 创建模式（默认）：经 feishu.Bind 新建 base（任务表+版本表+甘特视图+六实体表）与
+//     沉淀文档并写回 token；幂等——项目已有 bitable_app_token 时直接提示已绑定，
+//     不产生任何调用。
 //   - 采用模式（给 --app-token）：不创建任何飞书资源，仅把既有 base/表/文档 token 写回项目，
 //     供双机共享同一 base（Task 14 E2E 场景；--task-table/--version-table 必填，--doc 可省，
-//     省略时 publish 会自动补建文档）。
+//     省略时 publish 会自动补建文档）。六实体表 id 可经
+//     --requirements-table/--reviews-table/--meetings-table/--bugs-table/
+//     --submissions-table/--releases-table 传入（均可省），创建方 bind 输出的共享提示
+//     含全部 id，整行复制即可；未传的表保留本机既有值，六实体未配置时 sync 自动跳过。
 //
 // PULSE_FEISHU_ENDPOINT 环境变量可覆盖官方域名（测试注入 httptest 地址用）。
 func newFeishuBindCmd() *cobra.Command {
 	var projectKey, appToken, taskTable, versionTable, docToken string
+	var requirementsTable, reviewsTable, meetingsTable, bugsTable, submissionsTable, releasesTable string
 	cmd := &cobra.Command{
 		Use:   "bind",
 		Short: "为项目创建（或采用既有）飞书同步 base 与沉淀文档，token 写回项目",
@@ -78,6 +83,36 @@ func newFeishuBindCmd() *cobra.Command {
 				if err := s.SaveProject(p); err != nil {
 					return err
 				}
+				// 六实体表 id（均可省）：合并写回 feishu_tables_json——指定的表覆盖，
+				// 未指定的表保留既有值（GetFeishuTables 对空 JSON 返回零值，即新建语义）
+				if requirementsTable != "" || reviewsTable != "" || meetingsTable != "" ||
+					bugsTable != "" || submissionsTable != "" || releasesTable != "" {
+					tables, err := s.GetFeishuTables(p.ID)
+					if err != nil {
+						return err
+					}
+					if requirementsTable != "" {
+						tables.Requirements = requirementsTable
+					}
+					if reviewsTable != "" {
+						tables.Reviews = reviewsTable
+					}
+					if meetingsTable != "" {
+						tables.Meetings = meetingsTable
+					}
+					if bugsTable != "" {
+						tables.Bugs = bugsTable
+					}
+					if submissionsTable != "" {
+						tables.TestSubmissions = submissionsTable
+					}
+					if releasesTable != "" {
+						tables.Releases = releasesTable
+					}
+					if err := s.SaveFeishuTables(p.ID, tables); err != nil {
+						return err
+					}
+				}
 				if err := logAction(s, a, behalf, p.ID, "feishu_bind", "project", p.ID); err != nil {
 					return err
 				}
@@ -96,9 +131,18 @@ func newFeishuBindCmd() *cobra.Command {
 			}
 			fmt.Fprintf(out, "项目 %s 已绑定飞书:\n", p.Key)
 			printBoundTokens(out, p, false)
+			// 共享提示含全部表 id（含六实体表），机器 B 可整行复制到采用模式 bind
+			tables, err := s.GetFeishuTables(p.ID)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(out, "其他机器共享提示: 执行 pulse feishu bind --project %s --app-token %s"+
-				" --task-table %s --version-table %s --doc %s 可绑定同一 base\n",
-				p.Key, p.FeishuBitableAppToken, p.FeishuTaskTableID, p.FeishuVersionTableID, p.FeishuDocToken)
+				" --task-table %s --version-table %s --doc %s"+
+				" --requirements-table %s --reviews-table %s --meetings-table %s"+
+				" --bugs-table %s --submissions-table %s --releases-table %s 可绑定同一 base\n",
+				p.Key, p.FeishuBitableAppToken, p.FeishuTaskTableID, p.FeishuVersionTableID, p.FeishuDocToken,
+				tables.Requirements, tables.Reviews, tables.Meetings,
+				tables.Bugs, tables.TestSubmissions, tables.Releases)
 			fmt.Fprintln(out, "日期列提示: 开始/截止 目前是文本列，甘特视图需日期类型；"+
 				"可在 Bitable 中将这两列改为日期类型（一次性手动操作）")
 			return nil
@@ -109,6 +153,12 @@ func newFeishuBindCmd() *cobra.Command {
 	cmd.Flags().StringVar(&taskTable, "task-table", "", "既有任务表 table_id（采用模式必填）")
 	cmd.Flags().StringVar(&versionTable, "version-table", "", "既有版本表 table_id（采用模式必填）")
 	cmd.Flags().StringVar(&docToken, "doc", "", "既有沉淀文档 document_id（采用模式可选，缺省时 publish 会自动补建）")
+	cmd.Flags().StringVar(&requirementsTable, "requirements-table", "", "既有需求表 table_id（采用模式可选，六实体同步用）")
+	cmd.Flags().StringVar(&reviewsTable, "reviews-table", "", "既有评审表 table_id（采用模式可选，六实体同步用）")
+	cmd.Flags().StringVar(&meetingsTable, "meetings-table", "", "既有会议表 table_id（采用模式可选，六实体同步用）")
+	cmd.Flags().StringVar(&bugsTable, "bugs-table", "", "既有 bug 表 table_id（采用模式可选，六实体同步用）")
+	cmd.Flags().StringVar(&submissionsTable, "submissions-table", "", "既有提测表 table_id（采用模式可选，六实体同步用）")
+	cmd.Flags().StringVar(&releasesTable, "releases-table", "", "既有发版表 table_id（采用模式可选，六实体同步用）")
 	return cmd
 }
 

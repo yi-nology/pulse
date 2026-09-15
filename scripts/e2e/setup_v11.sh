@@ -107,11 +107,11 @@ sqlite3 "$E/p1/pulse.db" "SELECT count(*) FROM activity a JOIN members m ON m.id
 unset PULSE_HOME
 PULSE_HOME="$E/p2" $P init demo --name 演示项目 >/dev/null
 PULSE_HOME="$E/p2" $P member add codex --type agent >/dev/null
-PULSE_HOME="$E/p2" $P feishu bind --project demo --app-token app1 --task-table tbl1 --version-table tbl2 --doc doc6 | grep -q '已绑定既有飞书 base' || fail "p2 adopt bind"
-PULSE_HOME="$E/p2" $P sync --project demo | tee "$E/sync_p2_first.out" | grep -q '拉取 4' || fail "p2 首次 sync 应拉到 v1.0+3 任务共 4 条"
-# 采用模式 CLI 不传六表 id（feishu_tables_json 在本机库），从 p1 拷贝等价于共享方告知 token
-TJSON=$(sqlite3 "$E/p1/pulse.db" "SELECT feishu_tables_json FROM projects WHERE id=1;")
-sqlite3 "$E/p2/pulse.db" "UPDATE projects SET feishu_tables_json='$TJSON' WHERE key='demo';"
+# 采用模式直接带六实体表 id（创建方 bind 共享提示整行复制）
+PULSE_HOME="$E/p2" $P feishu bind --project demo --app-token app1 --task-table tbl1 --version-table tbl2 --doc doc6 \
+  --requirements-table tbl3 --reviews-table tbl4 --meetings-table tbl5 \
+  --bugs-table tbl6 --submissions-table tbl7 --releases-table tbl8 | grep -q '已绑定既有飞书 base' || fail "p2 adopt bind"
+grep -q -- '--requirements-table tbl3' "$E/bind.out" || fail "p1 bind 共享提示未含六表 id"
 PULSE_HOME="$E/p2" $P sync --project demo | tee "$E/sync_p2.out"
 grep -q '同步完成' "$E/sync_p2.out" || fail "p2 六实体 sync"
 PULSE_HOME="$E/p2" $P requirement list --project demo | grep -q '支持扫码登录' || fail "p2 未拉到需求 1"

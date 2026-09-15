@@ -195,7 +195,9 @@ pulse report weekly --project demo                    # 周报 Markdown
 - **Bitable 开始/截止列为文本列**：bind 创建的任务表中开始/截止是文本列。甘特视图需要日期类型的列，请在 Bitable 中手动把这两列改为日期类型（每个 base 一次性操作；不改不影响 bind/sync/publish，只是甘特视图无法按条渲染）。
 - **Bitable 状态列不校验**：pulse 不校验飞书侧填入的状态词。在 Bitable 中把状态改成非法值后，该记录无法映射回本地状态，`pulse sync` 会告警并跳过这条记录（水位被压住、每轮重试），直到在飞书侧修正为止。
 - **双机同时改同一条记录为整条 last-writer-wins**：没有字段级合并，后写入的一方覆盖整条记录。autopush 默认写完即推，被覆盖的一方通常无感知；`pulse sync` 的输出会对"本地近期修改被飞书侧覆盖"补一条警告；双方均有本地未同步改动时才另落 `sync_conflict` 活动备查。
-- **双机共享 base 时六实体表 id 需手动告知**：`feishu bind` 采用模式（`--app-token`）只传任务表/版本表/文档三个 token；六实体表 id 存在创建方的 `projects.feishu_tables_json` 里，第二台机器需从创建方获得该 JSON 并写入本机库（`sqlite3` 更新 `projects.feishu_tables_json`）后六实体才参与同步，未配置时自动跳过、只同步任务与版本（不报错）。
+- **双机共享 base 时六实体表 id 随 bind 旗标传递**：`feishu bind` 创建模式的"其他机器共享提示"会打印带全六实体表 id 的完整命令（`--requirements-table/--reviews-table/--meetings-table/--bugs-table/--submissions-table/--releases-table`），机器 B 整行复制到采用模式执行即可让六实体参与同步；未传的表保留本机既有值，六实体未配置时自动跳过、只同步任务与版本（不报错）。
+- **双机各自建协作文档可能分叉**：`feishu_doc_token` 不参与双机同步。两台机器各自为"同一条"记录建协作文档时会得到两份独立文档（各自 token 只存本机），协作内容可能分叉；共享 base 时应约定由一侧建文档。
+- **评审记录的需求ID 可能错链**：实体本地 `id` 只在本机库内唯一，不是全局身份。双机各自建需求再共享同一 base 时，评审记录的 需求ID 在对方机器上可能指向另一条需求；sync 拉取侧对本地不存在（或跨项目撞号）的引用会置空并告警，已落库的错链需人工核对。v1.2 计划引入共享实体身份。
 
 ## 开发
 
