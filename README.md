@@ -1,7 +1,9 @@
 # pulse
 
 本地优先的项目管理 CLI：任务 / 版本 / 成员 / 活动全部存在本机 SQLite，可单人离线使用；
-需要多人协作时，通过飞书多维表格（Bitable）双向同步，报表可一键沉淀到飞书文档。
+v1.1 起覆盖研发交付闭环六实体（需求 / 评审 / 会议 / bug / 提测单 / 发版记录），
+需要多人协作时，通过飞书多维表格（Bitable）双向同步，报表与协作记录（评审纪要、
+会议纪要、提测自检清单、发版清单等）可一键沉淀到飞书文档。
 内置 MCP server（stdio），可被 ZCode / Claude Code / Codex 等编码代理直接驱动，
 agent 的每次写入都带归因（`actor_type=agent` + `on_behalf_of`）。
 
@@ -99,9 +101,13 @@ pulse report weekly --project demo                    # 周报 Markdown
 
 > 把 `/path/to/pulse` 换成实际二进制路径（`which pulse`）；`PULSE_HOME` 建议用绝对路径。
 
-重启代理后即可对话式驱动，共 12 个工具：`list_projects`、`get_project_status`、
+重启代理后即可对话式驱动，共 27 个工具——12 个核心工具：`list_projects`、`get_project_status`、
 `list_tasks`、`add_task`、`update_task`、`add_dependency`、`list_versions`、
-`add_version`、`update_version`、`list_members`、`get_workload`、`publish_feishu`。
+`add_version`、`update_version`、`list_members`、`get_workload`、`publish_feishu`；
+15 个研发交付闭环工具：`create_requirement` / `update_requirement` / `list_requirements`、
+`create_bug` / `update_bug` / `list_bugs`、`create_test_submission` / `update_test_submission` /
+`list_test_submissions`、`create_release` / `update_release` / `list_releases`、
+`create_review`、`list_reviews`、`list_meetings`。
 
 每次 agent 写入都会在 activity 里归因：`actor_type=agent`、执行者是 `PULSE_ACTOR`
 对应的 agent 成员；代理"代表某人"操作时传 `delegated_by`，activity 的
@@ -168,6 +174,12 @@ pulse report weekly --project demo                    # 周报 Markdown
 | `pulse task rm <id>` | 软删任务（归档保留） |
 | `pulse task dep <id> --on <taskID>` | 添加完成-开始（FS）依赖 |
 | `pulse version add <name> --project K [--target YYYY-MM-DD]` / `list` / `update <id> [--status --target]` | 版本管理（planned\|in_dev\|released\|shipped） |
+| `pulse requirement add <title> --project K [--owner --priority --status --no-doc]` / `list` / `update <id> [--status --owner --priority]` / `doc <id>` | 需求管理（proposed\|reviewing\|accepted\|in_dev\|delivered\|rejected；默认按模板建协作文档） |
+| `pulse review record --project K [--requirement ID] --kind requirement\|release\|test [--conclusion pending --no-doc]` / `pulse review conclude <id> --conclusion passed\|passed_with_notes\|rejected` | 评审记录与结论（纪要内容在飞书文档协作） |
+| `pulse meeting record <title> --project K [--no-doc]` / `pulse meeting list --project K` | 会议记录登记（纪要内容在飞书文档协作） |
+| `pulse bug add <title> --project K [--severity 1-4 --assignee --requirement --found-version]` / `list [--status --severity]` / `update <id> [--status --assignee --severity]` | 缺陷管理（severity 1-4=P0-P3，缺省 3=P2；open\|fixing\|fixed\|verified\|closed\|wontfix） |
+| `pulse submit create --project K --version V [--requirement --test-owner --no-doc]` / `list [--version]` / `pulse submit update <id> --status submitted\|testing\|passed\|failed` | 提测单管理（draft 提交到测试结论，时间自动补记） |
+| `pulse release new --project K --version V [--manager --no-doc]` / `list` / `pulse release update <id> --status preparing\|testing\|released\|rolled_back` | 发版记录（进入 released 自动补记发布时间） |
 | `pulse report gantt\|workload\|versions\|weekly --project K [--out FILE]` | 报表（gantt/workload/versions 为 HTML，weekly 为 Markdown） |
 | `pulse sync --project K` | 双向同步（先推本地变更，再拉共享变更） |
 | `pulse feishu bind --project K [--app-token X --task-table Y --version-table Z --doc W]` | 创建（或采用既有）飞书 base 与沉淀文档 |
@@ -177,9 +189,13 @@ pulse report weekly --project demo                    # 周报 Markdown
 ## 已知限制
 
 - **publish 追加不去重**：`pulse feishu publish` 每次向沉淀文档追加新块，不检测重复。同一份报表重复发布会产生重复段落；需要最新结论时以最新一次发布为准，旧段落需在飞书文档中手动清理。
+- **记录文档内容不回流**：需求/评审/会议/提测单/发版的协作文档由 pulse 按模板**只建一次**，之后的正文编辑（结论、纪要、清单勾选）都在飞书文档中多人协作完成，pulse 不更新也不解析这些内容。实体的结构化状态流转只经 CLI/MCP 显式操作（如 `pulse review conclude`、`pulse bug update`）。
+- **MCP 写不自动建记录文档**：经 MCP 工具（`create_requirement` 等）创建的记录不会自动建协作文档；CLI 创建命令默认自动建（`--no-doc` 跳过）。需要为 MCP 建的需求补建文档时执行 `pulse requirement doc <id>`（get-or-create，已建过则直接显示 token）。
+- **评审 conclude / 会议登记目前仅 CLI**：MCP 侧评审只能 `create_review`（记一次评审，结论 pending）与 `list_reviews` 只读查看，给出结论的 `review conclude` 和会议登记 `meeting record` 暂无对应 MCP 工具，需在 CLI 执行。
 - **Bitable 开始/截止列为文本列**：bind 创建的任务表中开始/截止是文本列。甘特视图需要日期类型的列，请在 Bitable 中手动把这两列改为日期类型（每个 base 一次性操作；不改不影响 bind/sync/publish，只是甘特视图无法按条渲染）。
 - **Bitable 状态列不校验**：pulse 不校验飞书侧填入的状态词。在 Bitable 中把状态改成非法值后，该记录无法映射回本地状态，`pulse sync` 会告警并跳过这条记录（水位被压住、每轮重试），直到在飞书侧修正为止。
 - **双机同时改同一条记录为整条 last-writer-wins**：没有字段级合并，后写入的一方覆盖整条记录。autopush 默认写完即推，被覆盖的一方通常无感知；`pulse sync` 的输出会对"本地近期修改被飞书侧覆盖"补一条警告；双方均有本地未同步改动时才另落 `sync_conflict` 活动备查。
+- **双机共享 base 时六实体表 id 需手动告知**：`feishu bind` 采用模式（`--app-token`）只传任务表/版本表/文档三个 token；六实体表 id 存在创建方的 `projects.feishu_tables_json` 里，第二台机器需从创建方获得该 JSON 并写入本机库（`sqlite3` 更新 `projects.feishu_tables_json`）后六实体才参与同步，未配置时自动跳过、只同步任务与版本（不报错）。
 
 ## 开发
 
