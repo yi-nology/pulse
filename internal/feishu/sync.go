@@ -14,11 +14,8 @@ package feishu
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/zhangyi/pulse/internal/model"
@@ -310,23 +307,6 @@ func (ss *syncSession) markPulled(entity string, id int64, recordID, hash string
 	}
 	_ = SetSyncState(ss.s, pendingRecordKey(entity, id), "") // 清除 pending；失败无害（仅在 record_id 为空时才查）
 	return true
-}
-
-// isTimeoutErr 判断错误是否为超时类：context 截止、网络层超时（net.Error Timeout），
-// 或错误文本含 "context deadline exceeded"（http.Client Timeout 的包装形态）。
-// ctx 主动取消不算超时（不应触发核对）。
-func isTimeoutErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return true
-	}
-	return strings.Contains(err.Error(), "context deadline exceeded")
 }
 
 // timeoutCreateReconcile 是 RecordCreate 超时防重复核对（REAL-2）：创建请求超时类

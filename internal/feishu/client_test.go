@@ -121,6 +121,66 @@ func TestDoWithRetryOnRateLimit(t *testing.T) {
 	}
 }
 
+// TestDoWithRetryRetriesNetworkTimeout：真实租户新表首拉偶发 context deadline
+// exceeded（HTTP client 30s 超时）。网络超时类错误与 429 退避独立、额外补试 1 次：
+// 第一次挂起超过注入的短超时、第二次正常 → 调用成功且共 2 次请求。
+func TestDoWithRetryRetriesNetworkTimeout(t *testing.T) {
+	shortBackoff(t)
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc(tokenPath, tokenOK("t-1"))
+	mux.HandleFunc("/open-apis/bitable/v1/apps/b1/tables/t1/records/search", func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			time.Sleep(300 * time.Millisecond) // 超过注入的 client 超时 → 客户端侧超时
+			respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"items": []any{}}})
+			return
+		}
+		respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"items": []any{
+			map[string]any{"record_id": "r1", "fields": map[string]any{"任务": "a"}},
+		}}})
+	})
+	c := newFakeFeishu(t, mux)
+	c.http.Timeout = 80 * time.Millisecond // 注入短超时（生产默认 30s）
+	warn := captureWarn(t)
+
+	records, err := c.API().RecordSearch(context.Background(), "b1", "t1")
+	if err != nil {
+		t.Fatalf("RecordSearch: %v", err)
+	}
+	if len(records) != 1 || records[0].RecordID != "r1" {
+		t.Fatalf("records = %+v, want r1", records)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("共发出 %d 次请求, want 2（超时补试 1 次）", n)
+	}
+	if !strings.Contains(warn.String(), "超时") {
+		t.Fatalf("超时补试应记录警告, got %q", warn.String())
+	}
+}
+
+// TestDoWithRetryTimeoutOnlyOnce：连续超时只补试一次，第二次超时即返回错误（防无限循环）。
+func TestDoWithRetryTimeoutOnlyOnce(t *testing.T) {
+	shortBackoff(t)
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc(tokenPath, tokenOK("t-1"))
+	mux.HandleFunc("/open-apis/bitable/v1/apps/b1/tables/t1/records/search", func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		time.Sleep(200 * time.Millisecond) // 每次都超过注入的超时
+		respJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"items": []any{}}})
+	})
+	c := newFakeFeishu(t, mux)
+	c.http.Timeout = 50 * time.Millisecond
+	captureWarn(t)
+
+	if _, err := c.API().RecordSearch(context.Background(), "b1", "t1"); err == nil {
+		t.Fatal("连续超时必须返回错误")
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("共发出 %d 次请求, want 2（超时只补试一次）", n)
+	}
+}
+
 // TestNonRetryableErrorNotRetried：业务码非限流错误必须立即返回，不能重试。
 func TestNonRetryableErrorNotRetried(t *testing.T) {
 	shortBackoff(t)

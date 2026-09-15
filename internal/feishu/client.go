@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -206,11 +208,15 @@ func (c *Client) callAPI(ctx context.Context, method, path string, payload, out 
 }
 
 // doWithRetry 执行一次 HTTP 请求；遇 HTTP 429 或响应体业务码 99991400 时，
-// 按 backoffBase*2^n 指数退避重试（最多 maxRetries 次）；其余错误立即返回。
-// 返回最终一次响应的原始体，由调用方解析。
+// 按 backoffBase*2^n 指数退避重试（最多 maxRetries 次）。网络超时类错误
+// （context.DeadlineExceeded / net.Error Timeout，http.Client Timeout 即此形态）
+// 与限流退避独立、全程额外补试 1 次——真实租户新表首拉偶发超时，补试一次即可成功；
+// 补试前记录警告，且 ctx 已整体截止时不补试（区分 client 超时与 ctx 超时，防无限循环）。
+// 其余错误立即返回。返回最终一次响应的原始体，由调用方解析。
 func (c *Client) doWithRetry(ctx context.Context, method, rawURL string, payload []byte, header http.Header) ([]byte, error) {
 	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	timeoutRetried := false
+	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if err := sleepCtx(ctx, backoffBase<<(attempt-1)); err != nil {
 				return nil, err
@@ -220,12 +226,38 @@ func (c *Client) doWithRetry(ctx context.Context, method, rawURL string, payload
 		if err == nil {
 			return body, nil
 		}
-		if !retryable {
-			return nil, err
+		if retryable {
+			lastErr = err
+			if attempt >= maxRetries {
+				return nil, fmt.Errorf("限流退避重试 %d 次后仍失败: %w", maxRetries, lastErr)
+			}
+			continue
 		}
-		lastErr = err
+		// 非限流错误：仅网络超时类补试 1 次（与 429 逻辑独立，全程仅此一次）
+		if isTimeoutErr(err) && !timeoutRetried && ctx.Err() == nil {
+			timeoutRetried = true
+			fmt.Fprintf(warnWriter, "警告: 请求超时将补试 1 次（%s %s）: %v\n", method, rawURL, err)
+			lastErr = err
+			continue
+		}
+		return nil, err
 	}
-	return nil, fmt.Errorf("限流退避重试 %d 次后仍失败: %w", maxRetries, lastErr)
+}
+
+// isTimeoutErr 判断错误是否为网络超时类：context 截止、net.Error Timeout
+// （http.Client Timeout 包装为 *url.Error，其 Timeout()=true）。ctx 主动取消不算。
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "context deadline exceeded")
 }
 
 // once 执行单次 HTTP 请求；retryable 标记该错误是否为限流类（值得退避重试）。
