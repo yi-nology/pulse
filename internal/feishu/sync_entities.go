@@ -134,7 +134,13 @@ func pushEntity[T any](ss *syncSession, def entityDef[T], tableID string) error 
 		recID := ss.resolvePushRecordID(def.entity, m.id, m.recordID)
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, tableID, fields)
-			if err != nil {
+			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：服务端可能已写入，按内容核对一次
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, tableID, fields); found != "" {
+					ss.warn("推送%s %d 超时，经内容核对复用远端记录 %s（未重复建行）", def.label, m.id, found)
+					recID = found
+				}
+			}
+			if err != nil && recID == "" {
 				ss.warn("推送%s %d 失败（本地变更已保留，恢复后可补推）: %v", def.label, m.id, err)
 				continue
 			}

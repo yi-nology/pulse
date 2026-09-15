@@ -30,6 +30,7 @@ type fakeAPI struct {
 	searchErr     error               // RecordSearch 注入失败
 	createIDs     map[string][]string // RecordCreate 按 tableID 依次回放的 record_id（缺省 rec1）
 	createErr     error               // RecordCreate 注入失败
+	createErrOnce error               // RecordCreate 一次性失败（只影响首次调用，模拟超时但服务端可能已写入）
 	updateErr     error               // RecordUpdate 注入失败
 	createdFields []map[string]any    // 每次 RecordCreate 收到的 fields（按调用序）
 	updatedFields []map[string]any    // 每次 RecordUpdate 收到的 fields（按调用序）
@@ -83,6 +84,11 @@ func (f *fakeAPI) RecordSearch(ctx context.Context, appToken, tableID string) ([
 
 func (f *fakeAPI) RecordCreate(ctx context.Context, appToken, tableID string, fields map[string]any) (string, error) {
 	f.record("RecordCreate", appToken, tableID)
+	if f.createErrOnce != nil {
+		err := f.createErrOnce
+		f.createErrOnce = nil // 仅一次：模拟超时（服务端可能已写入），后续调用恢复正常
+		return "", err
+	}
 	if f.createErr != nil {
 		return "", f.createErr
 	}

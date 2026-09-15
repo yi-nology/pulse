@@ -712,6 +712,93 @@ func TestSyncOverwriteSilentWhenSyncedAtMissing(t *testing.T) {
 	}
 }
 
+// —— REAL-2：RecordCreate 超时（服务端可能已写入）→ 立即按内容核对一次，命中采纳其
+// record_id 走正常回填，绝不盲目重试建重复行；非超时错误不触发核对。—————————————————
+
+// countSearches 统计 fake 上对指定表的 RecordSearch 次数。
+func countSearches(fake *fakeAPI, tableID string) int {
+	n := 0
+	for _, c := range fake.calls {
+		if c.method == "RecordSearch" && len(c.args) > 1 && c.args[1] == tableID {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSyncCreateTimeoutAdoptsExistingRecord：create 返回超时但记录实际已写入（搜表可
+// 见同内容记录）→ 采纳 record_id、不重复建行、res.Pushed 正常；核对本身占用一次搜表。
+func TestSyncCreateTimeoutAdoptsExistingRecord(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	tk := mustCreateTask(t, s, p.ID, actor, "写周报")
+	m, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushed := TaskToFields(model.Task{Title: "写周报", Status: "todo", Priority: 3,
+		EstimateDays: 2, AssigneeID: m.ID}, map[int64]string{m.ID: "tester"}, map[int64]string{})
+	fake := &fakeAPI{
+		createErrOnce: fmt.Errorf("创建记录失败: %w", context.DeadlineExceeded), // 超时但服务端已写入
+		searchByTable: searchScript("tblTask", taskRecord("recX", 3000, pushed)),
+	}
+
+	res, err := SyncProject(context.Background(), clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("SyncProject: %v", err)
+	}
+	// record_id 采纳并正常回填（record_id + hash）
+	tk = wantTaskSynced(t, s, tk.ID, "recX")
+	if len(tk.BitableSyncedHash) != 16 {
+		t.Fatalf("synced_hash 未落库: %q", tk.BitableSyncedHash)
+	}
+	// 不重复建行：失败的 create 未产出新行，采纳后也未再 create
+	if len(fake.createdFields) != 0 {
+		t.Fatalf("超时后不得重复建行: created=%+v", fake.createdFields)
+	}
+	if res.Pushed != 1 {
+		t.Fatalf("Pushed = %d, want 1（采纳后走正常回填）(%+v)", res.Pushed, res)
+	}
+	// tblTask 搜表 = 超时核对 1 次 + pull 1 次；pull 侧同内容自回声
+	if n := countSearches(fake, "tblTask"); n != 2 {
+		t.Fatalf("tblTask RecordSearch = %d, want 2（核对+pull）: %+v", n, fake.calls)
+	}
+	if res.SkippedEcho != 1 || res.Pulled != 0 {
+		t.Fatalf("pull 侧应自回声跳过: %+v", res)
+	}
+}
+
+// TestSyncCreateNonTimeoutNoReconcile：非超时错误维持原失败语义（告警 + dirty 保留），
+// 不触发内容核对（tblTask 只有 pull 的那一次搜表）。
+func TestSyncCreateNonTimeoutNoReconcile(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	tk := mustCreateTask(t, s, p.ID, actor, "写周报")
+	fake := &fakeAPI{createErr: errors.New("无权限"), searchByTable: searchScript("tblTask")}
+
+	res, err := SyncProject(context.Background(), clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("SyncProject: %v", err)
+	}
+	tk, _, err = s.GetTask(tk.ID)
+	if err != nil || tk.BitableRecordID != "" {
+		t.Fatalf("record_id = %q, want 空（未采纳）err=%v", tk.BitableRecordID, err)
+	}
+	if res.Pushed != 0 {
+		t.Fatalf("Pushed = %d, want 0 (%+v)", res.Pushed, res)
+	}
+	if n := countSearches(fake, "tblTask"); n != 1 {
+		t.Fatalf("非超时错误不得触发核对，tblTask RecordSearch = %d, want 1（仅 pull）", n)
+	}
+	foundWarn := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "推送任务") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Fatalf("失败应告警: %+v", res.Warnings)
+	}
+}
+
 // —— 补充：TaskToFields/FieldsToTask 往返一致（回声判定的根基）———————————————————
 func TestTaskFieldsRoundTrip(t *testing.T) {
 

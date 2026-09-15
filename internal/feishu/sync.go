@@ -14,8 +14,11 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zhangyi/pulse/internal/model"
@@ -309,6 +312,43 @@ func (ss *syncSession) markPulled(entity string, id int64, recordID, hash string
 	return true
 }
 
+// isTimeoutErr 判断错误是否为超时类：context 截止、网络层超时（net.Error Timeout），
+// 或错误文本含 "context deadline exceeded"（http.Client Timeout 的包装形态）。
+// ctx 主动取消不算超时（不应触发核对）。
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "context deadline exceeded")
+}
+
+// timeoutCreateReconcile 是 RecordCreate 超时防重复核对（REAL-2）：创建请求超时类
+// 失败时服务端可能已成功写入，客户端却拿不到 record_id，盲目重试会建重复行。
+// 立即对该表做一次 RecordSearch，按 ContentHash 归一化后内容精确匹配（同表内字段
+// 完全一致的记录）→ 命中返回其 record_id 供正常回填；未命中或核对本身失败返回空串
+// （维持原失败语义：告警 + dirty 保留）。非超时错误不触发核对（调用方保证）。
+func (ss *syncSession) timeoutCreateReconcile(appToken, tableID string, fields map[string]any) string {
+	recs, err := ss.api.RecordSearch(ss.ctx, appToken, tableID)
+	if err != nil {
+		ss.warn("创建超时后核对 %s 失败（恢复后可补推）: %v", tableID, err)
+		return ""
+	}
+	want := ContentHash(fields)
+	for _, rec := range recs {
+		if ContentHash(rec.Fields) == want {
+			return rec.RecordID
+		}
+	}
+	return ""
+}
+
 // —— push ————————————————————————————————————————————————————————————————
 
 // pushVersions 推送本地版本脏行：无 record_id 建记录并回填，否则更新；软删不适用版本表。
@@ -326,7 +366,13 @@ func (ss *syncSession) pushVersions() error {
 		recID := ss.resolvePushRecordID("version", v.ID, v.BitableRecordID)
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, fields)
-			if err != nil {
+			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：服务端可能已写入，按内容核对一次
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, fields); found != "" {
+					ss.warn("推送版本 %s 超时，经内容核对复用远端记录 %s（未重复建行）", v.Name, found)
+					recID = found
+				}
+			}
+			if err != nil && recID == "" {
 				ss.warn("推送版本 %s 失败（本地变更已保留，恢复后可补推）: %v", v.Name, err)
 				continue
 			}
@@ -365,7 +411,13 @@ func (ss *syncSession) pushMembers(membersTableID string) error {
 		recID := m.BitableRecordID
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, membersTableID, fields)
-			if err != nil {
+			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：同 pushTasks
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, membersTableID, fields); found != "" {
+					ss.warn("推送成员 %s 超时，经内容核对复用远端记录 %s（未重复建行）", m.Name, found)
+					recID = found
+				}
+			}
+			if err != nil && recID == "" {
 				ss.warn("推送成员 %s 失败（本地变更已保留，恢复后可补推）: %v", m.Name, err)
 				continue
 			}
@@ -412,7 +464,13 @@ func (ss *syncSession) pushTasks() error {
 		recID := ss.resolvePushRecordID("task", t.ID, t.BitableRecordID)
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, fields)
-			if err != nil {
+			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：服务端可能已写入，按内容核对一次
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, fields); found != "" {
+					ss.warn("推送任务 %d 超时，经内容核对复用远端记录 %s（未重复建行）", t.ID, found)
+					recID = found
+				}
+			}
+			if err != nil && recID == "" {
 				ss.warn("推送任务 %d 失败（本地变更已保留，恢复后可补推）: %v", t.ID, err)
 				continue
 			}
