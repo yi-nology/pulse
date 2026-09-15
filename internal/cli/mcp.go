@@ -43,10 +43,10 @@ func newMCPCmd() *cobra.Command {
 				feishu.BestEffort(st, cfg, projectKey)
 			}
 			// 装配点：publish_feishu 桥接到 feishu.PublishReport（保持 mcpserver 零飞书依赖）。
-			// 触发人取 default_actor（MCP 侧无 --agent 旗标，agent 身份经 PULSE_ACTOR 已是
-			// 执行者本身，沉淀文档的署名用配置的默认人类账号，与 BestEffort 的 actor 同源）。
+			// 执行者归因到 agent（PULSE_ACTOR，E2E-4）：agent 发起的发布其落款与返回
+			// actor 都署 agent 名；沉淀文档前的静默同步等活动同样归属 agent。
 			mcpserver.PublishReportFunc = func(st *store.Store, projectKey, report string) (any, error) {
-				return publishReportForMCP(st, cfg, projectKey, report)
+				return publishReportForMCP(st, cfg, projectKey, report, agentName)
 			}
 			// warnWriter 只在此一次性固定到 stderr：MCP 允许并发执行工具，任何工具回调里
 			// 再 SetWarnWriter 都会与另一工具的 autopush 写警告构成数据竞争（接口字无锁）。
@@ -59,7 +59,9 @@ func newMCPCmd() *cobra.Command {
 
 // publishReportForMCP 是 mcpserver.PublishReportFunc 的桥接实现：解析项目与执行者
 // 后走 feishu.PublishReport，把文档 token 与发布摘要作为 JSON 结果回给代理。
-func publishReportForMCP(st *store.Store, cfg *config.Config, projectKey, report string) (any, error) {
+// agentName 是发起发布的 agent 名（来自 PULSE_ACTOR）：非空时执行者解析为 agent
+// 成员（落款/返回 actor 用其名，E2E-4），为空时退回配置的默认人类账号（现状）。
+func publishReportForMCP(st *store.Store, cfg *config.Config, projectKey, report, agentName string) (any, error) {
 	p, found, err := st.GetProjectByKey(projectKey)
 	if err != nil {
 		return nil, err
@@ -67,7 +69,7 @@ func publishReportForMCP(st *store.Store, cfg *config.Config, projectKey, report
 	if !found {
 		return nil, fmt.Errorf("项目不存在: %s", projectKey)
 	}
-	a, _, err := actor.Resolve(st, cfg.DefaultActor, "", "")
+	a, _, err := actor.Resolve(st, cfg.DefaultActor, agentName, "")
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -578,6 +579,108 @@ func TestSyncReusesPendingRecordAfterInterruptedBackfill(t *testing.T) {
 	// pending 用完即清
 	if v, found, err := GetSyncState(s, pendingRecordKey("task", tk.ID)); err != nil || (found && v != "") {
 		t.Fatalf("pending id 未清除: v=%q found=%v err=%v", v, found, err)
+	}
+}
+
+// —— E2E-3：远端覆盖本地"近期人为修改"时补显式提示（不改 LWW 语义，仅 UX）—————————
+
+// setPullWatermark 直写任务表 pull 水位，模拟"上次 pull 留下的旧水位"。
+func setPullWatermark(t *testing.T, s *store.Store, projectID, ts int64) {
+	t.Helper()
+	if err := SetSyncState(s, watermarkKey(projectID, "tasks"), strconv.FormatInt(ts, 10)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// touchTaskKeepSynced 通过"改了再改回"把本地 updated_at 推进到当前，而行内容
+// 与 synced_hash 恢复一致——等价于"本地任务已同步（autopush 已推）但近期有
+// 人为修改痕迹"，不会触发 push 脏行路径。
+func touchTaskKeepSynced(t *testing.T, s *store.Store, id int64, actor model.Member, title string) {
+	t.Helper()
+	tmp := title + "（临时）"
+	if _, err := s.UpdateTask(id, store.TaskChanges{Title: &tmp}, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateTask(id, store.TaskChanges{Title: &title}, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSyncOverwriteWarnsWhenLocalEditedRecently：本地任务 synced 后人为推进本地
+// updated_at，再改远端同记录 → sync 覆盖本地时 Warnings 必须含提示文案。
+func TestSyncOverwriteWarnsWhenLocalEditedRecently(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	tk := mustCreateTask(t, s, p.ID, actor, "双机任务")
+	fake := &fakeAPI{}
+	ctx := context.Background()
+	if _, err := SyncProject(ctx, clientWith(fake), s, p, actor); err != nil {
+		t.Fatalf("首次 sync: %v", err)
+	}
+	tk = wantTaskSynced(t, s, tk.ID, "rec1")
+
+	// 旧水位：一小时前（首轮之后留下），本地 updated_at 随后人为推进到"现在"
+	setPullWatermark(t, s, p.ID, time.Now().Unix()-3600)
+	touchTaskKeepSynced(t, s, tk.ID, actor, tk.Title)
+
+	// 远端（另一台机器）改了同一任务
+	remote := map[string]any{
+		"任务名": "双机任务（远端改）", "状态": "todo", "负责人": "tester",
+		"优先级": "3", "预估人日": float64(2), "已废弃": false,
+	}
+	fake.searchByTable = searchScript("tblTask", taskRecord("rec1", time.Now().Unix(), remote))
+
+	res, err := SyncProject(ctx, clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if res.Pulled != 1 {
+		t.Fatalf("远端修改应覆盖本地: %+v", res)
+	}
+	want := fmt.Sprintf("任务 #%d 双机任务 被飞书侧更新覆盖（本地近期有修改）", tk.ID)
+	for _, w := range res.Warnings {
+		if w == want {
+			return
+		}
+	}
+	t.Fatalf("Warnings 应含 %q: %#v", want, res.Warnings)
+}
+
+// TestSyncOverwriteSilentWhenLocalNotRecentlyEdited：反向——本地自上次 pull 之后
+// 无修改（旧水位晚于本地 updated_at）→ 远端覆盖照常发生但不得出现该提示。
+func TestSyncOverwriteSilentWhenLocalNotRecentlyEdited(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	tk := mustCreateTask(t, s, p.ID, actor, "稳定任务")
+	fake := &fakeAPI{}
+	ctx := context.Background()
+	if _, err := SyncProject(ctx, clientWith(fake), s, p, actor); err != nil {
+		t.Fatalf("首次 sync: %v", err)
+	}
+	tk = wantTaskSynced(t, s, tk.ID, "rec1")
+
+	// 旧水位在本行最后修改（创建）之后：本地此后无人动过
+	setPullWatermark(t, s, p.ID, time.Now().Unix()+60)
+
+	remote := map[string]any{
+		"任务名": "稳定任务（远端改）", "状态": "todo", "负责人": "tester",
+		"优先级": "3", "预估人日": float64(2), "已废弃": false,
+	}
+	fake.searchByTable = searchScript("tblTask", taskRecord("rec1", time.Now().Unix()+120, remote))
+
+	res, err := SyncProject(ctx, clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if res.Pulled != 1 {
+		t.Fatalf("远端修改应照常覆盖本地: %+v", res)
+	}
+	after, _, err := s.GetTask(tk.ID)
+	if err != nil || after.Title != "稳定任务（远端改）" {
+		t.Fatalf("覆盖未落地: %+v err=%v", after, err)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "被飞书侧更新覆盖") {
+			t.Fatalf("本地无近期修改不应告警: %#v", res.Warnings)
+		}
 	}
 }
 

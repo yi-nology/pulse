@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -39,7 +40,7 @@ func TestPublishReportForMCPReportsFreshDoc(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := publishReportForMCP(s, cfg, "demo", "weekly")
+	out, err := publishReportForMCP(s, cfg, "demo", "weekly", "")
 	if err != nil {
 		t.Fatalf("publishReportForMCP: %v", err)
 	}
@@ -62,5 +63,62 @@ func TestPublishReportForMCPReportsFreshDoc(t *testing.T) {
 	}
 	if n := blockN.Load(); n != 1 {
 		t.Fatalf("BlockAppend 次数 = %d, want 1", n)
+	}
+}
+
+// TestPublishReportForMCPAttributesAgent：E2E-4——PULSE_ACTOR=codex 时经桥接
+// publish 的返回 actor 必须是 agent 成员 codex（而非配置的默认人类），且文档
+// 块体的防混淆标题与落款都署 codex（"由 codex 触发"/"触发人 codex"）。
+func TestPublishReportForMCPAttributesAgent(t *testing.T) {
+	s, cfg := feishuTestEnv(t)
+	p, err := s.CreateProject("demo", "演示", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, _, bodies := newFakeFeishu(t)
+	// 已绑 base + 已绑文档：直接落块，不触发自动建档路径
+	p.FeishuBitableAppToken = "appB"
+	p.FeishuTaskTableID = "tblTask"
+	p.FeishuVersionTableID = "tblVer"
+	p.FeishuDocToken = "docD"
+	if err := s.SaveProject(p); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PULSE_ACTOR", "codex")
+
+	out, err := publishReportForMCP(s, cfg, "demo", "weekly", os.Getenv("PULSE_ACTOR"))
+	if err != nil {
+		t.Fatalf("publishReportForMCP: %v", err)
+	}
+	res, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("result type = %T, want map[string]any", out)
+	}
+	if res["actor"] != "codex" {
+		t.Fatalf("返回 actor = %v, want codex（agent 发起的发布必须归因到 agent）", res["actor"])
+	}
+	// codex 必须以 agent 类型落成员表
+	ms, err := s.ListMembers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentType := ""
+	for _, m := range ms {
+		if m.Name == "codex" {
+			agentType = m.Type
+		}
+	}
+	if agentType != "agent" {
+		t.Fatalf("codex 成员类型 = %q, want agent", agentType)
+	}
+	// 落款与防混淆标题署 agent 名
+	bs := bodies()
+	if len(bs) != 1 {
+		t.Fatalf("BlockAppend 次数 = %d, want 1", len(bs))
+	}
+	for _, want := range []string{"由 codex 触发", "由 pulse 导出 · 触发人 codex"} {
+		if !strings.Contains(bs[0], want) {
+			t.Fatalf("块体必须含 %q: %s", want, bs[0])
+		}
 	}
 }

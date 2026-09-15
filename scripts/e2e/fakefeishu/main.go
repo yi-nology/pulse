@@ -25,9 +25,9 @@ type table struct {
 	Views   []string           `json:"views"`
 }
 type base struct {
-	Name    string          `json:"name"`
-	Tables  map[string]*tab `json:"tables"`
-	Docs    []string        `json:"docs"`
+	Name   string          `json:"name"`
+	Tables map[string]*tab `json:"tables"`
+	Docs   []string        `json:"docs"`
 }
 type tab table // alias 避免与方法遮蔽
 type doc struct {
@@ -37,14 +37,14 @@ type doc struct {
 }
 
 type server struct {
-	mu       sync.Mutex
-	nApp     int
-	nTbl     int
-	nRec     int
-	nDoc     int
-	bases    map[string]*base
-	docs     map[string]*doc
-	lastLMT  int64
+	mu      sync.Mutex
+	nApp    int
+	nTbl    int
+	nRec    int
+	nDoc    int
+	bases   map[string]*base
+	docs    map[string]*doc
+	lastLMT int64
 }
 
 func (s *server) nextLMT() int64 {
@@ -153,7 +153,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/open-apis/docx/v1/documents/") && strings.HasSuffix(path, "/children") && r.Method == "POST":
 		docID := segment(path, 4)
 		var body struct {
-			Index   int               `json:"index"`
+			Index    int               `json:"index"`
 			Children []json.RawMessage `json:"children"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
