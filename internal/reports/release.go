@@ -113,7 +113,7 @@ func collectVersions(s *store.Store, projectID int64, now time.Time) (model.Proj
 	if err != nil {
 		return model.Project{}, nil, nil, fmt.Errorf("reports: versions tasks: %w", err)
 	}
-	risks, err := rules.Evaluate(s, projectID, now, blockedDaysDefault)
+	risks, err := rules.Evaluate(s, projectID, now, rules.BlockedDaysDefault)
 	if err != nil {
 		return model.Project{}, nil, nil, fmt.Errorf("reports: versions risks: %w", err)
 	}

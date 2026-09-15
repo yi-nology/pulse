@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS dependencies (
   depends_on_task_id INTEGER NOT NULL REFERENCES tasks(id),
   type TEXT NOT NULL DEFAULT 'FS'
 );
+-- 同向依赖唯一：兜底 AddDependency 预查询与插入之间的并发窗口（TOCTOU），
+-- 对已存在重复行的旧库建索引会失败，属预期数据修复信号。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dependencies_pair ON dependencies(task_id, depends_on_task_id);
 CREATE TABLE IF NOT EXISTS activity (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER REFERENCES projects(id),

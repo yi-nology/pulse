@@ -134,6 +134,12 @@ func TestAddDependencyDuplicateRejected(t *testing.T) {
 	if !errors.Is(err, ErrDuplicateDependency) {
 		t.Fatalf("duplicate dependency must be ErrDuplicateDependency, got %v", err)
 	}
+	// 唯一索引兜底：绕过 AddDependency 预查询直接插重复对，
+	// 必须被 idx_dependencies_pair 拒绝（TOCTOU 防线的存在性验证）。
+	if _, err := s.db.Exec(`INSERT INTO dependencies (task_id, depends_on_task_id) VALUES (?, ?)`,
+		t1.ID, t2.ID); !isUniqueViolation(err) {
+		t.Fatalf("unique index must reject duplicate pair, got %v", err)
+	}
 	// 反方向是另一条依赖，允许
 	if err := s.AddDependency(t2.ID, t1.ID, actor, nil); err != nil {
 		t.Fatalf("reverse direction must be allowed: %v", err)

@@ -22,10 +22,6 @@ import (
 	"github.com/zhangyi/pulse/internal/store"
 )
 
-// blockedDaysDefault 报表里 blocked 风险的判定阈值（天），与 rules 测试惯用值一致；
-// 阈值配置化属后续任务，报表侧先用默认值。
-const blockedDaysDefault = 3
-
 const layoutDate = "2006-01-02"
 
 // lookupProject 取项目信息用于报表标题；项目不存在时降级为 "项目 <id>"。
@@ -160,7 +156,7 @@ func WeeklyMarkdown(s *store.Store, projectID int64, now time.Time) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("reports: weekly members: %w", err)
 	}
-	risks, err := rules.Evaluate(s, projectID, now, blockedDaysDefault)
+	risks, err := rules.Evaluate(s, projectID, now, rules.BlockedDaysDefault)
 	if err != nil {
 		return nil, fmt.Errorf("reports: weekly risks: %w", err)
 	}

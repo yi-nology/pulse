@@ -8,9 +8,6 @@ import (
 	"github.com/zhangyi/pulse/internal/store"
 )
 
-// loadHorizonDays 负载统计窗口（天），与 rules 的口径一致。
-const loadHorizonDays = 14
-
 // workloadTask 计入负载的未完成任务（未来 14 天内到期）。
 type workloadTask struct {
 	ID       int64
@@ -56,7 +53,7 @@ func WorkloadHTML(s *store.Store, projectID int64, now time.Time) ([]byte, error
 	}
 
 	t0 := utcToday(now)
-	tEnd := t0.AddDate(0, 0, loadHorizonDays)
+	tEnd := t0.AddDate(0, 0, rules.LoadHorizonDays)
 
 	rows := make([]workloadRow, 0, len(ws))
 	for _, w := range ws {
@@ -86,7 +83,7 @@ func WorkloadHTML(s *store.Store, projectID int64, now time.Time) ([]byte, error
 
 	return renderHTML("workload.html", workloadData{
 		Title:   "人力负载 · " + p.Key,
-		Window:  fmt.Sprintf("未来 %d 天（%s ~ %s）", loadHorizonDays, t0.Format(layoutDate), tEnd.Format(layoutDate)),
+		Window:  fmt.Sprintf("未来 %d 天（%s ~ %s）", rules.LoadHorizonDays, t0.Format(layoutDate), tEnd.Format(layoutDate)),
 		Rows:    rows,
 		HasRows: len(rows) > 0,
 	})

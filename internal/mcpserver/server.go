@@ -34,10 +34,6 @@ import (
 // requiredDesc 每个工具 description 必须包含的提示句（spec §5.2）。
 const requiredDesc = "更新任务前先 list_tasks 确认 id"
 
-// blockedDaysDefault get_project_status 里 blocked 风险的判定阈值（天），
-// 与 internal/reports 的同名常量保持一致。
-const blockedDaysDefault = 3
-
 // serverVersion 随二进制注入前的固定占位（spec 未约定版本号上报格式）。
 const serverVersion = "dev"
 
@@ -322,7 +318,7 @@ func (c *core) getProjectStatus(_ context.Context, _ *mcp.CallToolRequest, in ge
 			open++
 		}
 	}
-	risks, err := rules.Evaluate(c.st, p.ID, time.Now(), blockedDaysDefault)
+	risks, err := rules.Evaluate(c.st, p.ID, time.Now(), rules.BlockedDaysDefault)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -67,6 +67,11 @@ func (s *Store) AddDependency(taskID, dependsOnID int64, actor model.Member, beh
 	}
 	if _, err := tx.Exec(`INSERT INTO dependencies (task_id, depends_on_task_id) VALUES (?, ?)`,
 		taskID, dependsOnID); err != nil {
+		// 预查询与插入之间存在并发窗口，唯一索引 idx_dependencies_pair 兜底，
+		// 冲突同样映射为 ErrDuplicateDependency（与 versions 的处理同构）。
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: 任务 %d 已依赖任务 %d", ErrDuplicateDependency, taskID, dependsOnID)
+		}
 		return fmt.Errorf("insert dependency %d->%d: %w", taskID, dependsOnID, err)
 	}
 	detail, err := json.Marshal(depDetail{DependsOnTaskID: dependsOnID, Type: "FS"})

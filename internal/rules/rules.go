@@ -36,10 +36,17 @@ const (
 	LevelMedium = "medium"
 )
 
+// BlockedDaysDefault blocked 风险的默认判定阈值（天）：Evaluate 的 blockedDays
+// 参数在各调用方（报表 / MCP）未单独配置时统一取该值。
+const BlockedDaysDefault = 3
+
+// LoadHorizonDays 负载统计窗口（天）：负载率与负载报表统计
+// [today, today+LoadHorizonDays] 闭区间内到期的未完成任务。
+const LoadHorizonDays = 14
+
 const (
 	layoutDate          = "2006-01-02"
 	layoutStatusChanged = "2006-01-02 15:04:05" // 与 store 的 UTC 文本格式一致
-	loadHorizonDays     = 14                    // 负载统计窗口（天）
 )
 
 // Risk 一条人读风险。
@@ -165,7 +172,7 @@ func risksFrom(tasks []model.Task, deps []model.Dependency, ws []Workload, now t
 				Level: LevelHigh,
 				Title: fmt.Sprintf("%s 负载率 %.0f%%", w.Member.Name, w.LoadRate*100),
 				Detail: fmt.Sprintf("%s 未来 %d 天到期未完成任务共 %.1f 人日，容量 %.1f 人日（%.1f 人日/周 × %d）",
-					w.Member.Name, loadHorizonDays, w.LoadDays, w.CapacityDays,
+					w.Member.Name, LoadHorizonDays, w.LoadDays, w.CapacityDays,
 					w.Member.Capacity, 2),
 			})
 		}
@@ -177,7 +184,7 @@ func risksFrom(tasks []model.Task, deps []model.Dependency, ws []Workload, now t
 // done 任务与无到期日任务不计入 LoadDays；CapacityDays=0 时 LoadRate=0。
 func workloadsFrom(tasks []model.Task, members []model.Member, now time.Time) []Workload {
 	t0 := today(now)
-	tEnd := t0.AddDate(0, 0, loadHorizonDays)
+	tEnd := t0.AddDate(0, 0, LoadHorizonDays)
 	byID := make(map[int64]model.Member, len(members))
 	for _, m := range members {
 		byID[m.ID] = m

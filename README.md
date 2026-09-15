@@ -174,6 +174,13 @@ pulse report weekly --project demo                    # 周报 Markdown
 | `pulse feishu publish --project K --report weekly\|versions\|all` | 报表沉淀到飞书文档（每次追加新块，带触发人落款） |
 | `pulse mcp` | 启动 MCP server（stdio），需 `PULSE_ACTOR` 环境变量 |
 
+## 已知限制
+
+- **publish 追加不去重**：`pulse feishu publish` 每次向沉淀文档追加新块，不检测重复。同一份报表重复发布会产生重复段落；需要最新结论时以最新一次发布为准，旧段落需在飞书文档中手动清理。
+- **Bitable 开始/截止列为文本列**：bind 创建的任务表中开始/截止是文本列。甘特视图需要日期类型的列，请在 Bitable 中手动把这两列改为日期类型（每个 base 一次性操作；不改不影响 bind/sync/publish，只是甘特视图无法按条渲染）。
+- **Bitable 状态列不校验**：pulse 不校验飞书侧填入的状态词。在 Bitable 中把状态改成非法值后，该记录无法映射回本地状态，`pulse sync` 会告警并跳过这条记录（水位被压住、每轮重试），直到在飞书侧修正为止。
+- **双机同时改同一条记录为整条 last-writer-wins**：没有字段级合并，后写入的一方覆盖整条记录。autopush 默认写完即推，被覆盖的一方通常无感知；`pulse sync` 的输出会对"本地近期修改被飞书侧覆盖"补一条警告（并落 `sync_conflict` 活动备查）。
+
 ## 开发
 
 ```bash
