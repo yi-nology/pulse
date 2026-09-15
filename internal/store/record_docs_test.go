@@ -163,7 +163,7 @@ func TestSetRecordDocTokenIdempotent(t *testing.T) {
 
 // TestSetRecordDocTokenErrors：实体不存在与未知实体名都要报错。
 func TestSetRecordDocTokenErrors(t *testing.T) {
-	s, _, actor := docTokenEnv(t)
+	s, p, actor := docTokenEnv(t)
 	if err := s.SetRecordDocToken("requirement", 999, "docT", actor, nil); err == nil ||
 		!strings.Contains(err.Error(), "需求不存在") {
 		t.Fatalf("want 需求不存在 error, got %v", err)
@@ -172,7 +172,19 @@ func TestSetRecordDocTokenErrors(t *testing.T) {
 		!strings.Contains(err.Error(), "会议不存在") {
 		t.Fatalf("want 会议不存在 error, got %v", err)
 	}
-	if err := s.SetRecordDocToken("bug", 1, "docT", actor, nil); err == nil ||
+	// v1.2 起 bug 在支持之列（协作文档链接列跨机同步，pull 侧采纳经此回写）
+	bug, err := s.CreateBug(model.Bug{ProjectID: p.ID, Title: "带文档的bug", Severity: 2}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecordDocToken("bug", bug.ID, "docB", actor, nil); err != nil {
+		t.Fatalf("bug token 写回应受支持: %v", err)
+	}
+	bg, _, err := s.GetBug(bug.ID)
+	if err != nil || bg.FeishuDocToken != "docB" {
+		t.Fatalf("bug token 未落库: %+v err=%v", bg, err)
+	}
+	if err := s.SetRecordDocToken("神秘实体", 1, "docT", actor, nil); err == nil ||
 		!strings.Contains(err.Error(), "未知实体") {
 		t.Fatalf("want 未知实体 error, got %v", err)
 	}

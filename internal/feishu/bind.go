@@ -19,11 +19,12 @@ func SetWarnWriter(w io.Writer) { warnWriter = w }
 
 // 飞书多维表格字段类型编号（api.go Field.Type）。
 const (
-	fieldTypeText         = 1 // 文本
-	fieldTypeNumber       = 2 // 数字
-	fieldTypeSingleSelect = 3 // 单选
-	fieldTypeDate         = 5 // 日期
-	fieldTypeCheckbox     = 7 // 复选框
+	fieldTypeText         = 1  // 文本
+	fieldTypeNumber       = 2  // 数字
+	fieldTypeSingleSelect = 3  // 单选
+	fieldTypeDate         = 5  // 日期
+	fieldTypeCheckbox     = 7  // 复选框
+	fieldTypeHyperlink    = 15 // 超链接
 )
 
 // taskTableFields / versionTableFields 是 bind 建表用的字段定义。
@@ -76,7 +77,8 @@ func memberTableFields() []Field {
 // mapping_v11.go 的映射一一对应。
 // v11FieldType 按列名给出原生类型：日期列（评审/会议时间、发布时间）用日期、
 // 枚举列（状态/结论/类型/严重级/版本引用）与人员列用单选（人员选项即名单，
-// 随指派自动创建；Bitable 侧手动新增的选项经同步会自动注册为本地成员）、其余文本。
+// 随指派自动创建；Bitable 侧手动新增的选项经同步会自动注册为本地成员）、
+// 协作文档列用超链接（写 {"text","link"}，读回取链接 path 末段 token）、其余文本。
 func v11FieldType(column string) int {
 	switch column {
 	case "评审时间", "时间", "发布时间":
@@ -84,6 +86,8 @@ func v11FieldType(column string) int {
 	case "状态", "结论", "评审类型", "严重级", "优先级", "版本", "发现版本",
 		"负责人", "提测人", "测试负责人", "发布负责人":
 		return fieldTypeSingleSelect
+	case "协作文档":
+		return fieldTypeHyperlink
 	default:
 		return fieldTypeText
 	}
@@ -114,17 +118,17 @@ type v11Table struct {
 // 撞号错链）。
 func v11TableDefs() []v11Table {
 	return []v11Table{
-		{"需求表", []string{"需求名", "状态", "负责人", "优先级", "描述", "需求UID"},
+		{"需求表", []string{"需求名", "状态", "负责人", "优先级", "描述", "需求UID", "协作文档"},
 			func(t *store.FeishuTables, id string) { t.Requirements = id }},
-		{"评审表", []string{"评审类型", "结论", "评审时间", "需求ID"},
+		{"评审表", []string{"评审类型", "结论", "评审时间", "需求ID", "协作文档"},
 			func(t *store.FeishuTables, id string) { t.Reviews = id }},
-		{"会议表", []string{"会议标题", "时间"},
+		{"会议表", []string{"会议标题", "时间", "协作文档"},
 			func(t *store.FeishuTables, id string) { t.Meetings = id }},
-		{"bug表", []string{"标题", "严重级", "状态", "负责人", "发现版本", "需求ID"},
+		{"bug表", []string{"标题", "严重级", "状态", "负责人", "发现版本", "需求ID", "协作文档"},
 			func(t *store.FeishuTables, id string) { t.Bugs = id }},
-		{"提测表", []string{"版本", "状态", "提测人", "测试负责人", "范围", "需求ID"},
+		{"提测表", []string{"版本", "状态", "提测人", "测试负责人", "范围", "需求ID", "协作文档"},
 			func(t *store.FeishuTables, id string) { t.TestSubmissions = id }},
-		{"发版表", []string{"版本", "状态", "发布负责人", "发布时间", "备注"},
+		{"发版表", []string{"版本", "状态", "发布负责人", "发布时间", "备注", "协作文档"},
 			func(t *store.FeishuTables, id string) { t.Releases = id }},
 	}
 }

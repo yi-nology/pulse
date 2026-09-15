@@ -303,6 +303,30 @@ func (ss *syncSession) ensureLocalRequirementRef(label string, ref *int64) {
 	}
 }
 
+// adoptCollabDocInto 实现"协作文档"列的采纳语义（内存侧）：本地 token 为空且远端有
+// 链接时，把提取出的 token 暂存到行的 FeishuDocToken 上——有更新路径的实体由
+// applyRemote 落库（persistCollabDoc），全新拉入行由 create 落库；本地已有 token 时
+// 不动（防覆盖，两份文档不互相抢写）。会议 create-only，仅在全新拉入行采纳。
+func adoptCollabDocInto(dst *string, remote any) {
+	if *dst == "" {
+		*dst = collabDocToken(remote)
+	}
+}
+
+// persistCollabDoc 把 fromFields 采纳的协作文档 token 落库（SetRecordDocToken 同值
+// no-op、不重复落活动；单人协作文档跨机共享同一篇）。current 为库内实盘；失败仅告警
+// 并保持原值（下轮 pull 重试采纳）。返回行上应生效的 token（供指纹按实盘重算）。
+func persistCollabDoc(ss *syncSession, entity string, id int64, adopted, current string) string {
+	if adopted == "" || adopted == current {
+		return current
+	}
+	if err := ss.s.SetRecordDocToken(entity, id, adopted, ss.actor, nil); err != nil {
+		ss.warn("回写 %s#%d 的协作文档失败（下轮 pull 重试）: %v", entity, id, err)
+		return current
+	}
+	return adopted
+}
+
 func requirementDef() entityDef[model.Requirement] {
 	return entityDef[model.Requirement]{
 		entity: "requirement", table: "requirements", label: "需求",
@@ -340,7 +364,9 @@ func requirementDef() entityDef[model.Requirement] {
 			return RequirementToFields(r, ss.idToName)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.Requirement) (model.Requirement, []string, []string) {
-			return FieldsToRequirement(f, local, ss.nameToID)
+			changed, missing, warns := FieldsToRequirement(f, local, ss.nameToID)
+			adoptCollabDocInto(&changed.FeishuDocToken, f["协作文档"])
+			return changed, missing, warns
 		},
 		newBase: func(ss *syncSession) model.Requirement { return model.Requirement{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, r model.Requirement) (model.Requirement, error) {
@@ -354,15 +380,23 @@ func requirementDef() entityDef[model.Requirement] {
 				ss.reqIDToUID[created.ID] = created.UID
 				ss.reqUIDToID[created.UID] = created.ID
 			}
+			// 拉入行的协作文档采纳（Create 不含 token 列，经 SetRecordDocToken 补写）
+			created.FeishuDocToken = persistCollabDoc(ss, "requirement", created.ID, r.FeishuDocToken, created.FeishuDocToken)
 			return created, nil
 		},
 		applyRemote: func(ss *syncSession, id int64, r model.Requirement) (model.Requirement, error) {
 			priority := int64(r.Priority)
 			// UID 随远端合入（采纳语义）：双机各自生成的行随共享记录收敛为同一全局身份
-			return ss.s.UpdateRequirement(id, store.RequirementChanges{
+			updated, err := ss.s.UpdateRequirement(id, store.RequirementChanges{
 				Title: &r.Title, Description: &r.Description, Status: &r.Status,
 				OwnerID: &r.OwnerID, Priority: &priority, UID: &r.UID,
 			}, ss.actor, nil)
+			if err != nil {
+				return model.Requirement{}, err
+			}
+			// 协作文档采纳落库（Create* 不含 token 列，更新路径经 SetRecordDocToken）
+			updated.FeishuDocToken = persistCollabDoc(ss, "requirement", id, r.FeishuDocToken, updated.FeishuDocToken)
+			return updated, nil
 		},
 		softDelete: func(ss *syncSession, id int64) error {
 			return ss.s.SoftDeleteSyncEntity("requirement", id, ss.actor, nil)
@@ -386,18 +420,30 @@ func reviewDef() entityDef[model.Review] {
 			return ReviewToFields(v, ss.reqIDToUID)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.Review) (model.Review, []string, []string) {
-			return FieldsToReview(f, local, ss.reqUIDToID)
+			changed, missing, warns := FieldsToReview(f, local, ss.reqUIDToID)
+			adoptCollabDocInto(&changed.FeishuDocToken, f["协作文档"])
+			return changed, missing, warns
 		},
 		newBase: func(ss *syncSession) model.Review { return model.Review{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, v model.Review) (model.Review, error) {
 			// 需求ID（UID 解析/legacy 数字串的结果）是本地引用：不在本地时置空（外键安全）
 			ss.ensureLocalRequirementRef("评审", &v.RequirementID)
-			return ss.s.CreateReview(v, ss.actor, nil)
+			created, err := ss.s.CreateReview(v, ss.actor, nil)
+			if err != nil {
+				return created, err
+			}
+			created.FeishuDocToken = persistCollabDoc(ss, "review", created.ID, v.FeishuDocToken, created.FeishuDocToken)
+			return created, nil
 		},
 		applyRemote: func(ss *syncSession, id int64, v model.Review) (model.Review, error) {
 			// 仅结论可远端合入（评审类型/评审时间/需求ID 创建即定）；经
 			// UpdateReviewConclusion 落库并落 update 活动，同值为 no-op
-			return ss.s.UpdateReviewConclusion(id, v.Conclusion, ss.actor, nil)
+			updated, err := ss.s.UpdateReviewConclusion(id, v.Conclusion, ss.actor, nil)
+			if err != nil {
+				return model.Review{}, err
+			}
+			updated.FeishuDocToken = persistCollabDoc(ss, "review", id, v.FeishuDocToken, updated.FeishuDocToken)
+			return updated, nil
 		},
 		softDelete: func(ss *syncSession, id int64) error {
 			return ss.s.SoftDeleteSyncEntity("review", id, ss.actor, nil)
@@ -416,11 +462,22 @@ func meetingDef() entityDef[model.Meeting] {
 		},
 		toFields: func(ss *syncSession, m model.Meeting) map[string]any { return MeetingToFields(m) },
 		fromFields: func(ss *syncSession, f map[string]any, local model.Meeting) (model.Meeting, []string, []string) {
-			return FieldsToMeeting(f, local)
+			changed, missing, warns := FieldsToMeeting(f, local)
+			// 会议 create-only：仅全新拉入行采纳协作文档（create 路径落库）；既有行
+			// 不采纳——无更新路径，远端链接差异按创建即定语义回声吸收，避免每轮重合
+			if local.ID == 0 {
+				adoptCollabDocInto(&changed.FeishuDocToken, f["协作文档"])
+			}
+			return changed, missing, warns
 		},
 		newBase: func(ss *syncSession) model.Meeting { return model.Meeting{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, m model.Meeting) (model.Meeting, error) {
-			return ss.s.CreateMeeting(m, ss.actor, nil)
+			created, err := ss.s.CreateMeeting(m, ss.actor, nil)
+			if err != nil {
+				return created, err
+			}
+			created.FeishuDocToken = persistCollabDoc(ss, "meeting", created.ID, m.FeishuDocToken, created.FeishuDocToken)
+			return created, nil
 		},
 		applyRemote: nil, // 会议无更新路径：create + 墓碑；远端修改吸收不回流
 		softDelete: func(ss *syncSession, id int64) error {
@@ -442,23 +499,35 @@ func bugDef() entityDef[model.Bug] {
 			return BugToFields(b, ss.idToName, ss.verIDToName, ss.reqIDToUID)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.Bug) (model.Bug, []string, []string) {
-			return FieldsToBug(f, local, ss.nameToID, ss.verNameToID, ss.reqUIDToID)
+			changed, missing, warns := FieldsToBug(f, local, ss.nameToID, ss.verNameToID, ss.reqUIDToID)
+			adoptCollabDocInto(&changed.FeishuDocToken, f["协作文档"])
+			return changed, missing, warns
 		},
 		newBase: func(ss *syncSession) model.Bug { return model.Bug{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, b model.Bug) (model.Bug, error) {
 			// 需求ID（UID 解析/legacy 数字串的结果）不在本地时置空（外键安全，同评审）
 			ss.ensureLocalRequirementRef("bug", &b.RequirementID)
-			return ss.s.CreateBug(b, ss.actor, nil)
+			created, err := ss.s.CreateBug(b, ss.actor, nil)
+			if err != nil {
+				return created, err
+			}
+			created.FeishuDocToken = persistCollabDoc(ss, "bug", created.ID, b.FeishuDocToken, created.FeishuDocToken)
+			return created, nil
 		},
 		applyRemote: func(ss *syncSession, id int64, b model.Bug) (model.Bug, error) {
 			severity := int64(b.Severity)
 			// 需求ID 可随远端更新（UpdateBug 有通道）：不在本地时置空（外键安全）
 			ss.ensureLocalRequirementRef("bug", &b.RequirementID)
-			return ss.s.UpdateBug(id, store.BugChanges{
+			updated, err := ss.s.UpdateBug(id, store.BugChanges{
 				Title: &b.Title, Status: &b.Status, Severity: &severity,
 				AssigneeID: &b.AssigneeID, FoundVersionID: &b.FoundVersionID,
 				RequirementID: &b.RequirementID,
 			}, ss.actor, nil)
+			if err != nil {
+				return model.Bug{}, err
+			}
+			updated.FeishuDocToken = persistCollabDoc(ss, "bug", id, b.FeishuDocToken, updated.FeishuDocToken)
+			return updated, nil
 		},
 		softDelete: func(ss *syncSession, id int64) error {
 			return ss.s.SoftDeleteSyncEntity("bug", id, ss.actor, nil)
@@ -484,7 +553,9 @@ func submissionDef() entityDef[model.TestSubmission] {
 			return SubmissionToFields(t, ss.idToName, ss.verIDToName, ss.reqIDToUID)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.TestSubmission) (model.TestSubmission, []string, []string) {
-			return FieldsToSubmission(f, local, ss.nameToID, ss.verNameToID, ss.reqUIDToID)
+			changed, missing, warns := FieldsToSubmission(f, local, ss.nameToID, ss.verNameToID, ss.reqUIDToID)
+			adoptCollabDocInto(&changed.FeishuDocToken, f["协作文档"])
+			return changed, missing, warns
 		},
 		newBase: func(ss *syncSession) model.TestSubmission { return model.TestSubmission{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, t model.TestSubmission) (model.TestSubmission, error) {
@@ -492,12 +563,22 @@ func submissionDef() entityDef[model.TestSubmission] {
 			// 待版本表（先行拉取）补齐后下轮自动重试；需求ID（UID 解析/legacy 结果）
 			// 不在本地时置空（外键安全，同评审）
 			ss.ensureLocalRequirementRef("提测单", &t.RequirementID)
-			return ss.s.CreateTestSubmission(t, ss.actor, nil)
+			created, err := ss.s.CreateTestSubmission(t, ss.actor, nil)
+			if err != nil {
+				return created, err
+			}
+			created.FeishuDocToken = persistCollabDoc(ss, "test_submission", created.ID, t.FeishuDocToken, created.FeishuDocToken)
+			return created, nil
 		},
 		applyRemote: func(ss *syncSession, id int64, t model.TestSubmission) (model.TestSubmission, error) {
-			return ss.s.UpdateTestSubmission(id, store.SubmissionChanges{
+			updated, err := ss.s.UpdateTestSubmission(id, store.SubmissionChanges{
 				Status: &t.Status, Scope: &t.Scope, TestOwnerID: &t.TestOwnerID,
 			}, ss.actor, nil)
+			if err != nil {
+				return model.TestSubmission{}, err
+			}
+			updated.FeishuDocToken = persistCollabDoc(ss, "test_submission", id, t.FeishuDocToken, updated.FeishuDocToken)
+			return updated, nil
 		},
 		softDelete: func(ss *syncSession, id int64) error {
 			return ss.s.SoftDeleteSyncEntity("test_submission", id, ss.actor, nil)
@@ -521,17 +602,29 @@ func releaseDef() entityDef[model.Release] {
 			return ReleaseToFields(r, ss.idToName, ss.verIDToName)
 		},
 		fromFields: func(ss *syncSession, f map[string]any, local model.Release) (model.Release, []string, []string) {
-			return FieldsToRelease(f, local, ss.nameToID, ss.verNameToID)
+			changed, missing, warns := FieldsToRelease(f, local, ss.nameToID, ss.verNameToID)
+			adoptCollabDocInto(&changed.FeishuDocToken, f["协作文档"])
+			return changed, missing, warns
 		},
 		newBase: func(ss *syncSession) model.Release { return model.Release{ProjectID: ss.p.ID} },
 		create: func(ss *syncSession, r model.Release) (model.Release, error) {
 			// version_id 非空且外键约束：失败重试语义同提测单
-			return ss.s.CreateRelease(r, ss.actor, nil)
+			created, err := ss.s.CreateRelease(r, ss.actor, nil)
+			if err != nil {
+				return created, err
+			}
+			created.FeishuDocToken = persistCollabDoc(ss, "release", created.ID, r.FeishuDocToken, created.FeishuDocToken)
+			return created, nil
 		},
 		applyRemote: func(ss *syncSession, id int64, r model.Release) (model.Release, error) {
-			return ss.s.UpdateRelease(id, store.ReleaseChanges{
+			updated, err := ss.s.UpdateRelease(id, store.ReleaseChanges{
 				Status: &r.Status, Notes: &r.Notes,
 			}, ss.actor, nil)
+			if err != nil {
+				return model.Release{}, err
+			}
+			updated.FeishuDocToken = persistCollabDoc(ss, "release", id, r.FeishuDocToken, updated.FeishuDocToken)
+			return updated, nil
 		},
 		softDelete: func(ss *syncSession, id int64) error {
 			return ss.s.SoftDeleteSyncEntity("release", id, ss.actor, nil)

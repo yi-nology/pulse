@@ -229,6 +229,7 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	wantFields(t, fake.calls[4].fields, []Field{
 		{Name: "需求名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 3},
 		{Name: "优先级", Type: 3}, {Name: "描述", Type: 1}, {Name: "需求UID", Type: 1},
+		{Name: "协作文档", Type: 15},
 		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
 	})
 	// 文档建在根目录，标题含项目名（成员表之后：calls[11] = DocCreate）

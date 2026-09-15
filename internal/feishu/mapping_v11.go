@@ -16,6 +16,7 @@ package feishu
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/zhangyi/pulse/internal/model"
 )
@@ -37,6 +38,9 @@ func RequirementToFields(r model.Requirement, memberNameByID map[int64]string) m
 	if r.UID != "" {
 		fields["需求UID"] = r.UID
 	}
+	if d := collabDocField(r.FeishuDocToken); d != nil {
+		fields["协作文档"] = d
+	}
 	return fields
 }
 
@@ -44,7 +48,7 @@ var requirementRequiredFields = []string{"需求名", "状态", "优先级"}
 
 var requirementFieldSet = map[string]bool{
 	"需求名": true, "状态": true, "负责人": true, "优先级": true, "描述": true, "已废弃": true,
-	"需求UID": true,
+	"需求UID": true, "协作文档": true,
 }
 
 // FieldsToRequirement 把远端字段映射到本地需求的变更（local 提供未映射字段的底值，
@@ -105,6 +109,9 @@ func ReviewToFields(v model.Review, reqIDToUID map[int64]string) map[string]any 
 	if c := dateToCell(v.HeldAt); c != nil {
 		fields["评审时间"] = c
 	}
+	if d := collabDocField(v.FeishuDocToken); d != nil {
+		fields["协作文档"] = d
+	}
 	return fields
 }
 
@@ -112,6 +119,7 @@ var reviewRequiredFields = []string{"评审类型", "结论"}
 
 var reviewFieldSet = map[string]bool{
 	"评审类型": true, "结论": true, "评审时间": true, "需求ID": true, "已废弃": true,
+	"协作文档": true,
 }
 
 // FieldsToReview 把远端字段映射到本地评审的变更；仅 结论 可远端合入（sync 侧经
@@ -171,12 +179,15 @@ func MeetingToFields(m model.Meeting) map[string]any {
 	if c := dateToCell(m.HeldAt); c != nil {
 		fields["时间"] = c
 	}
+	if d := collabDocField(m.FeishuDocToken); d != nil {
+		fields["协作文档"] = d
+	}
 	return fields
 }
 
 var meetingRequiredFields = []string{"会议标题"}
 
-var meetingFieldSet = map[string]bool{"会议标题": true, "时间": true, "已废弃": true}
+var meetingFieldSet = map[string]bool{"会议标题": true, "时间": true, "已废弃": true, "协作文档": true}
 
 // FieldsToMeeting 把远端字段映射到本地会议的变更；会议标题/时间创建即定
 // （会议无更新路径，sync 侧仅建行与墓碑，远端修改吸收不回流）。
@@ -203,7 +214,7 @@ func FieldsToMeeting(f map[string]any, local model.Meeting) (changed model.Meeti
 // BugToFields 把本地 bug 映射为 Bitable 字段（严重级 1..4 落文本列；需求ID 列为
 // 需求的全局 UID，v1.2 起随记录同步）。
 func BugToFields(b model.Bug, memberNameByID, versionNameByID map[int64]string, reqIDToUID map[int64]string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"标题":   b.Title,
 		"严重级":  strconv.Itoa(b.Severity),
 		"状态":   b.Status,
@@ -212,13 +223,17 @@ func BugToFields(b model.Bug, memberNameByID, versionNameByID map[int64]string, 
 		"需求ID": reqIDToUID[b.RequirementID],
 		"已废弃":  b.Archived,
 	}
+	if d := collabDocField(b.FeishuDocToken); d != nil {
+		fields["协作文档"] = d
+	}
+	return fields
 }
 
 var bugRequiredFields = []string{"标题", "严重级", "状态"}
 
 var bugFieldSet = map[string]bool{
 	"标题": true, "严重级": true, "状态": true, "负责人": true, "发现版本": true, "已废弃": true,
-	"需求ID": true,
+	"需求ID": true, "协作文档": true,
 }
 
 // FieldsToBug 把远端字段映射到本地 bug 的变更（Description/FixTaskID 本地独有，不被
@@ -283,7 +298,7 @@ func FieldsToBug(f map[string]any, local model.Bug, memberIDByName, versionIDByN
 
 // SubmissionToFields 把本地提测单映射为 Bitable 字段（需求ID 列为需求的全局 UID）。
 func SubmissionToFields(t model.TestSubmission, memberNameByID, versionNameByID map[int64]string, reqIDToUID map[int64]string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"版本":    versionNameByID[t.VersionID],
 		"状态":    t.Status,
 		"提测人":   memberNameByID[t.SubmittedBy],
@@ -292,13 +307,17 @@ func SubmissionToFields(t model.TestSubmission, memberNameByID, versionNameByID 
 		"需求ID":  reqIDToUID[t.RequirementID],
 		"已废弃":   t.Archived,
 	}
+	if d := collabDocField(t.FeishuDocToken); d != nil {
+		fields["协作文档"] = d
+	}
+	return fields
 }
 
 var submissionRequiredFields = []string{"版本", "状态"}
 
 var submissionFieldSet = map[string]bool{
 	"版本": true, "状态": true, "提测人": true, "测试负责人": true, "范围": true, "已废弃": true,
-	"需求ID": true,
+	"需求ID": true, "协作文档": true,
 }
 
 // FieldsToSubmission 把远端字段映射到本地提测单的变更（需求ID 创建即定——store 无对应
@@ -362,6 +381,9 @@ func ReleaseToFields(r model.Release, memberNameByID, versionNameByID map[int64]
 	if c := dateToCell(r.ReleasedAt); c != nil {
 		fields["发布时间"] = c
 	}
+	if d := collabDocField(r.FeishuDocToken); d != nil {
+		fields["协作文档"] = d
+	}
 	return fields
 }
 
@@ -369,6 +391,7 @@ var releaseRequiredFields = []string{"版本", "状态"}
 
 var releaseFieldSet = map[string]bool{
 	"版本": true, "状态": true, "发布负责人": true, "发布时间": true, "备注": true, "已废弃": true,
+	"协作文档": true,
 }
 
 // FieldsToRelease 把远端字段映射到本地发版的变更；发布时间创建即定（store 在进入
@@ -406,6 +429,62 @@ func FieldsToRelease(f map[string]any, local model.Release, memberIDByName, vers
 }
 
 // —— 共用小工具 ————————————————————————————————————————————————————————————
+
+// docURLPrefix 是"协作文档"列的链接前缀（docx 新版文档）。
+const docURLPrefix = "https://www.feishu.cn/docx/"
+
+// collabDocField 把非空 doc token 映射为"协作文档"超链接列的写入形态；
+// 空 token 返回 nil（调用方省略该键，不向远端写空链接）。
+func collabDocField(docToken string) map[string]any {
+	if docToken == "" {
+		return nil
+	}
+	return map[string]any{"text": "打开文档", "link": docURLPrefix + docToken}
+}
+
+// collabDocToken 从远端"协作文档"列提取 doc token（取链接 path 的最后一段）。
+// 形态容错：裸链接/token 字符串、{"text","link"} 对象或其数组（取首元素）；
+// 解析不出返回空串（调用方跳过采纳）。
+func collabDocToken(v any) string {
+	switch x := v.(type) {
+	case []any:
+		if len(x) == 0 {
+			return ""
+		}
+		return collabDocToken(x[0])
+	case map[string]any:
+		if link, ok := x["link"].(string); ok && link != "" {
+			return docTokenFromURL(link)
+		}
+		if text, ok := x["text"].(string); ok {
+			return docTokenFromURL(text)
+		}
+		return ""
+	case string:
+		return docTokenFromURL(x)
+	default:
+		return ""
+	}
+}
+
+// docTokenFromURL 取 URL path 最后一段作为 doc token；容忍直接存 token 的形态
+// （无斜杠按整串处理）；查询串/锚点剥离；非 ASCII 字母数字（飞书 token 字符集外，
+// 如手填的杂讯）返回 ""。
+func docTokenFromURL(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "?#"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return ""
+		}
+	}
+	return s
+}
 
 // resolveRequirementRef 把远端 需求ID 列文本解析回本地需求 id（v1.2 全局身份）：
 // 优先按需求UID 解析（32 位十六进制，跨机唯一）；未命中且为纯数字时按旧版本地 id

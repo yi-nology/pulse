@@ -10,7 +10,8 @@ import (
 )
 
 // recordDocEntity 把实体名映射到 表名 / activity.entity_type（协作记录文档 token 写回用）。
-// 五实体均含 feishu_doc_token 列；bug 无内置模板（v1.1 Task 3），不在支持之列。
+// 六实体均含 feishu_doc_token 列。bug 无内置模板（EnsureRecordDoc 不支持，见 records.go），
+// 但 v1.2 起协作文档链接列跨机同步，bug 的 token 写回（pull 侧采纳）在支持之列。
 func recordDocEntity(entity string) (table, entityType string, err error) {
 	switch entity {
 	case "requirement":
@@ -23,8 +24,10 @@ func recordDocEntity(entity string) (table, entityType string, err error) {
 		return "test_submissions", "test_submission", nil
 	case "release":
 		return "releases", "release", nil
+	case "bug":
+		return "bugs", "bug", nil
 	default:
-		return "", "", fmt.Errorf("未知实体 %q（须为 requirement|review|meeting|test_submission|release）", entity)
+		return "", "", fmt.Errorf("未知实体 %q（须为 requirement|review|meeting|test_submission|release|bug）", entity)
 	}
 }
 
@@ -41,12 +44,15 @@ func recordDocLabel(entityType string) string {
 		return "提测单"
 	case "release":
 		return "发版"
+	case "bug":
+		return "bug"
 	}
 	return entityType
 }
 
-// SetRecordDocToken 回写协作记录实体（需求/评审/会议/提测单/发版）的 feishu_doc_token，
-// 供飞书 adapter 建完模板文档后调用（协作记录文档只建一次，spec §3.2 内容不回流）。
+// SetRecordDocToken 回写协作记录实体（需求/评审/会议/提测单/发版/bug）的 feishu_doc_token，
+// 供飞书 adapter 建完模板文档后调用（协作记录文档只建一次，spec §3.2 内容不回流）；
+// v1.2 起也供 sync pull 侧"协作文档"链接列的采纳回写使用。
 // 单事务内完成：读旧行（不存在报错）→ token 同值为 no-op（不刷新 updated_at、不落活动）
 // → 更新 feishu_doc_token（同点刷新 updated_at）→ 落 activity action="feishu_record_doc"。
 func (s *Store) SetRecordDocToken(entity string, id int64, docToken string, actor model.Member, behalf *model.Member) error {
@@ -78,8 +84,11 @@ func (s *Store) SetRecordDocToken(entity string, id int64, docToken string, acto
 	case "release":
 		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM releases WHERE id = ?`, id).
 			Scan(&projectID, &old)
+	case "bug":
+		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM bugs WHERE id = ?`, id).
+			Scan(&projectID, &old)
 	default:
-		return fmt.Errorf("未知实体 %q（须为 requirement|review|meeting|test_submission|release）", entityType)
+		return fmt.Errorf("未知实体 %q（须为 requirement|review|meeting|test_submission|release|bug）", entityType)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%s不存在: id=%d", recordDocLabel(entityType), id)
@@ -106,6 +115,9 @@ func (s *Store) SetRecordDocToken(entity string, id int64, docToken string, acto
 			docToken, now, id)
 	case "release":
 		_, err = tx.Exec(`UPDATE releases SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
+			docToken, now, id)
+	case "bug":
+		_, err = tx.Exec(`UPDATE bugs SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
 			docToken, now, id)
 	}
 	if err != nil {
