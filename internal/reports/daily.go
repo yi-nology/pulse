@@ -195,7 +195,7 @@ func doneTaskIDsInWindow(acts []model.Activity) map[int64]bool {
 }
 
 func nextDay(t time.Time) time.Time {
-	return t.UTC().Truncate(24 * time.Hour).AddDate(0, 0, 1)
+	return t.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
 }
 
 func sortByDueID(ts []model.Task) {
