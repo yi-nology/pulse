@@ -531,6 +531,12 @@ func TestToolDescriptions(t *testing.T) {
 		"add_task": false, "update_task": false, "add_dependency": false,
 		"list_versions": false, "add_version": false, "update_version": false,
 		"list_members": false, "get_workload": false, "publish_feishu": false,
+		// v1.1 研发交付闭环（tools_v11.go 注册的 15 个）
+		"create_requirement": false, "update_requirement": false, "list_requirements": false,
+		"create_bug": false, "update_bug": false, "list_bugs": false,
+		"create_test_submission": false, "update_test_submission": false, "list_test_submissions": false,
+		"create_release": false, "update_release": false, "list_releases": false,
+		"create_review": false, "list_reviews": false, "list_meetings": false,
 	}
 	for _, tl := range lt.Tools {
 		seen, known := want[tl.Name]

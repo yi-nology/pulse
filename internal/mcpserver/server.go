@@ -88,6 +88,9 @@ func Register(srv *mcp.Server, s *store.Store, agentName, defaultActor string) {
 		Description: "项目成员未来 14 天负载（到期未完成人日 / 容量）。" + requiredDesc}, c.getWorkload)
 	mcp.AddTool(srv, &mcp.Tool{Name: "publish_feishu",
 		Description: "把报表（weekly|versions|all）沉淀到飞书文档。" + requiredDesc}, c.publishFeishu)
+	// v1.1 研发交付闭环 15 工具（requirements/bugs/test_submissions/releases/reviews/
+	// meetings），复用同一 core 依赖，注册体拆在 tools_v11.go。
+	RegisterDeliveryLoopTools(srv, c)
 }
 
 // core 聚合一次工具调用所需的依赖；方法即各工具实现。
