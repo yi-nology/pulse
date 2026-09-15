@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -384,6 +385,42 @@ func TestEnsureRecordDocUnconfigured(t *testing.T) {
 		if a.Action == "feishu_record_doc" {
 			t.Fatalf("未配置时不得落 feishu_record_doc 活动: %+v", acts)
 		}
+	}
+}
+
+// TestEnsureRecordDocBlockAppendFailsStillBindsToken：DocCreate 成功但 BlockAppend
+// 失败时仍回写 token（宁可指向半成品文档也不要孤儿增殖——token 未写回时重试会再建
+// 一个新文档），错误文案带上下文提示"可能不完整"与文档 id。
+func TestEnsureRecordDocBlockAppendFailsStillBindsToken(t *testing.T) {
+	s, p := openStore(t)
+	actor := recordActor(t, s)
+	r, err := s.CreateRequirement(model.Requirement{ProjectID: p.ID, Title: "R"}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAPI{blockErr: errors.New("块校验失败")}
+	_, err = EnsureRecordDoc(context.Background(), clientWith(fake), s, "requirement", r.ID, "tester")
+	if err == nil || !strings.Contains(err.Error(), "可能不完整") {
+		t.Fatalf("want 含「可能不完整」的错误, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "docT") {
+		t.Fatalf("错误应带文档 id 上下文, got %v", err)
+	}
+	saved, _, err := s.GetRequirement(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.FeishuDocToken != "docT" {
+		t.Fatalf("token 未回写（重试将再建孤儿文档）: %+v", saved)
+	}
+	// 已关联：幂等重入直接返回既有 token，不再产生新的 DocCreate
+	fake2 := &fakeAPI{}
+	tok, err := EnsureRecordDoc(context.Background(), clientWith(fake2), s, "requirement", r.ID, "tester")
+	if err != nil || tok != "docT" {
+		t.Fatalf("重入应幂等返回 docT, got %q err=%v", tok, err)
+	}
+	if len(fake2.calls) != 0 {
+		t.Fatalf("已绑定路径不应有飞书调用: %+v", fake2.calls)
 	}
 }
 

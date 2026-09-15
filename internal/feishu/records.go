@@ -5,7 +5,9 @@
 //   - 实体已有 token → 原样返回（零飞书调用）；
 //   - 否则 DocCreate（标题按模板）→ BlockAppend（模板块，自实体当前数据渲染，
 //     负责人/版本经 store 查询换名，查不到显示占位 id）→ store.SetRecordDocToken
-//     回写（同一事务内落 activity action="feishu_record_doc"）。
+//     回写（同一事务内落 activity action="feishu_record_doc"）。BlockAppend 失败时
+//     仍回写 token 并返回带上下文的错误：文档已存在，孤儿化不如指向半成品（重试
+//     前需先在飞书侧删除该文档）。
 //
 // 文档内容永不回流：pulse 只建一次，不更新、不解析，状态流转只经 CLI/MCP 显式操作。
 // 未配置飞书时调用方传 nil client，本函数返回引导性错误，由调用方降级为
@@ -59,7 +61,12 @@ func EnsureRecordDoc(ctx context.Context, c *Client, s *store.Store, entityKind 
 		return "", fmt.Errorf("创建协作记录文档失败: %w", err)
 	}
 	if err := c.API().BlockAppend(ctx, docToken, doc.blocks); err != nil {
-		return "", fmt.Errorf("写入模板块失败（%s）: %w", doc.title, err)
+		// 孤儿缓解：文档已建成，仍回写 token（已关联的重试走"幂等返回"分支，绝不重复
+		// 建文档）——宁可指向半成品文档也不要孤儿增殖。返回带上下文的错误，由调用方透出。
+		if tokErr := s.SetRecordDocToken(entityKind, id, docToken, a, behalf); tokErr != nil {
+			return "", fmt.Errorf("写入模板块失败（%s）且回写 token 失败: %v（块错误: %w）", doc.title, tokErr, err)
+		}
+		return "", fmt.Errorf("模板文档可能不完整（已关联，重试请先删除文档 %s）: %w", docToken, err)
 	}
 	if err := s.SetRecordDocToken(entityKind, id, docToken, a, behalf); err != nil {
 		return "", fmt.Errorf("写回文档 token 失败: %w", err)

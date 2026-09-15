@@ -37,6 +37,7 @@ type fakeAPI struct {
 
 	// —— publish 测试扩展 ————————————————————————————
 	blockBlocks [][]map[string]any // 每次 BlockAppend 收到的块序列（按调用序）
+	blockErr    error              // BlockAppend 注入失败（孤儿缓解测试用）
 }
 
 func (f *fakeAPI) record(method string, args ...string) {
@@ -116,6 +117,9 @@ func (f *fakeAPI) DocCreate(ctx context.Context, folderToken, title string) (str
 
 func (f *fakeAPI) BlockAppend(ctx context.Context, docToken string, blocks []map[string]any) error {
 	f.record("BlockAppend", docToken)
+	if f.blockErr != nil {
+		return f.blockErr
+	}
 	f.blockBlocks = append(f.blockBlocks, blocks)
 	return nil
 }
