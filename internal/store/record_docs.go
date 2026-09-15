@@ -50,7 +50,7 @@ func recordDocLabel(entityType string) string {
 // 单事务内完成：读旧行（不存在报错）→ token 同值为 no-op（不刷新 updated_at、不落活动）
 // → 更新 feishu_doc_token（同点刷新 updated_at）→ 落 activity action="feishu_record_doc"。
 func (s *Store) SetRecordDocToken(entity string, id int64, docToken string, actor model.Member, behalf *model.Member) error {
-	table, entityType, err := recordDocEntity(entity)
+	_, entityType, err := recordDocEntity(entity)
 	if err != nil {
 		return err
 	}
@@ -59,10 +59,28 @@ func (s *Store) SetRecordDocToken(entity string, id int64, docToken string, acto
 		return fmt.Errorf("begin set %s doc token: %w", entityType, err)
 	}
 	defer tx.Rollback()
+	// 逐实体穷举 switch，SQL 一律为调用点内联的编译期字面量：不拼接、不经变量传递。
 	var projectID int64
 	var old string
-	err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM `+table+` WHERE id = ?`, id).
-		Scan(&projectID, &old)
+	switch entityType {
+	case "requirement":
+		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM requirements WHERE id = ?`, id).
+			Scan(&projectID, &old)
+	case "review":
+		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM reviews WHERE id = ?`, id).
+			Scan(&projectID, &old)
+	case "meeting":
+		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM meetings WHERE id = ?`, id).
+			Scan(&projectID, &old)
+	case "test_submission":
+		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM test_submissions WHERE id = ?`, id).
+			Scan(&projectID, &old)
+	case "release":
+		err = tx.QueryRow(`SELECT project_id, feishu_doc_token FROM releases WHERE id = ?`, id).
+			Scan(&projectID, &old)
+	default:
+		return fmt.Errorf("未知实体 %q（须为 requirement|review|meeting|test_submission|release）", entityType)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%s不存在: id=%d", recordDocLabel(entityType), id)
 	}
@@ -72,8 +90,25 @@ func (s *Store) SetRecordDocToken(entity string, id int64, docToken string, acto
 	if old == docToken {
 		return nil
 	}
-	if _, err := tx.Exec(`UPDATE `+table+` SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
-		docToken, time.Now().UTC().Format(activitiesLayout), id); err != nil {
+	now := time.Now().UTC().Format(activitiesLayout)
+	switch entityType {
+	case "requirement":
+		_, err = tx.Exec(`UPDATE requirements SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
+			docToken, now, id)
+	case "review":
+		_, err = tx.Exec(`UPDATE reviews SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
+			docToken, now, id)
+	case "meeting":
+		_, err = tx.Exec(`UPDATE meetings SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
+			docToken, now, id)
+	case "test_submission":
+		_, err = tx.Exec(`UPDATE test_submissions SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
+			docToken, now, id)
+	case "release":
+		_, err = tx.Exec(`UPDATE releases SET feishu_doc_token = ?, updated_at = ? WHERE id = ?`,
+			docToken, now, id)
+	}
+	if err != nil {
 		return fmt.Errorf("update %s doc token id=%d: %w", entityType, id, err)
 	}
 	if err := insertActivity(tx, entityActivity(entityType, projectID, id, actor, behalf,
