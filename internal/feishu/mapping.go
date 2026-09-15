@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/zhangyi/pulse/internal/model"
 )
@@ -170,8 +171,34 @@ var versionFieldSet = map[string]bool{"版本名": true, "目标日期": true, "
 
 // —— 远端值的宽松取值助手（Bitable 各列类型的回传形态可能随端点微差）—————————————————
 
-// toText 把远端标量转为文本：string 原样；数字/布尔按 JSON 形态；其余 fmt 兜底。
+// flattenRichText 把 Bitable 文本字段读回的富文本数组（[{type:"text",text:"..."},...]）
+// 展平为拼接后的纯文本（真实租户实测形态，2026-09-15）；非富文本形态原样返回。
+func flattenRichText(v any) any {
+	arr, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	var b strings.Builder
+	for _, seg := range arr {
+		m, ok := seg.(map[string]any)
+		if !ok {
+			return v
+		}
+		switch t := m["text"].(type) {
+		case string:
+			b.WriteString(t)
+		case float64:
+			b.WriteString(strconv.FormatFloat(t, 'f', -1, 64))
+		default:
+			return v
+		}
+	}
+	return b.String()
+}
+
+// toText 把远端标量转为文本：string 原样；数字/布尔按 JSON 形态；富文本数组先展平；其余 fmt 兜底。
 func toText(v any) string {
+	v = flattenRichText(v)
 	switch x := v.(type) {
 	case nil:
 		return ""
@@ -188,6 +215,7 @@ func toText(v any) string {
 
 // toFloat 把远端数值转为 float64：数字直取；字符串尽力解析；其余 0。
 func toFloat(v any) float64 {
+	v = flattenRichText(v)
 	switch x := v.(type) {
 	case float64:
 		return x
