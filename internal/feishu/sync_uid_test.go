@@ -258,3 +258,65 @@ func TestSyncRequirementUIDAdoptedOnPull(t *testing.T) {
 		t.Fatalf("采纳后应回声收敛: %+v", res2)
 	}
 }
+
+// TestSyncUIDAdoptionRefreshesMapsForSameRoundReviews（审查修复回归）：
+// requirementDef.applyRemote 采纳远端 UID 后必须刷新会话映射——同一轮 pull 中
+// 后续评审记录引用该（新）UID 才能解析；被取代的旧 UID 保留为会话内别名，
+// 同轮仍带旧 UID 的引用也照常解析。修复前：评审建行即空关联且永不补链
+// （applyRemote 只写结论，fromFields 已解析出的引用被丢弃）。
+func TestSyncUIDAdoptionRefreshesMapsForSameRoundReviews(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	r := mustCreateRequirement(t, s, p.ID, actor, "迁移期的需求")
+	fake := &fakeAPI{}
+	ctx := context.Background()
+	// 首轮：推送建共享记录（需求UID = 本机生成的 uidOld）
+	if _, err := SyncProject(ctx, clientWith(fake), s, p, actor); err != nil {
+		t.Fatalf("首轮 sync: %v", err)
+	}
+	uidOld := r.UID
+	uidNew := "aabbccdd00112233aabbccdd00112233"
+	if uidNew == uidOld {
+		t.Fatal("前置条件：远端 UID 必须不同")
+	}
+	// 模拟迁移期双机分叉收敛：远端记录被另一台机器 LWW 赢下并携带它的 UID uidNew；
+	// 同一轮里还有两条评审——一条引用 uidNew、一条仍引用被取代的 uidOld。
+	remoteReq := map[string]any{
+		"需求名": "迁移期的需求", "状态": "in_dev", "负责人": "tester",
+		"优先级": "2", "描述": "支持 CSV 导出", "已废弃": false, "需求UID": uidNew,
+	}
+	revNew := map[string]any{
+		"评审类型": "requirement", "结论": "pending", "需求ID": uidNew, "已废弃": false,
+	}
+	revOld := map[string]any{
+		"评审类型": "requirement", "结论": "pending", "需求ID": uidOld, "已废弃": false,
+	}
+	fake.searchByTable = map[string][]Record{
+		"tblReq":    {taskRecord("rec1", time.Now().Unix()+10, remoteReq)},
+		"tblReview": {taskRecord("recRevNew", 2001, revNew), taskRecord("recRevOld", 2002, revOld)},
+	}
+	res, err := SyncProject(ctx, clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("同轮 sync: %v", err)
+	}
+	after, _, err := s.GetRequirement(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UID != uidNew {
+		t.Fatalf("需求应采纳远端全局身份: got %q want %q", after.UID, uidNew)
+	}
+	rvs, err := s.ListReviews(p.ID, 0)
+	if err != nil || len(rvs) != 2 {
+		t.Fatalf("两条评审都应合入: %+v err=%v", rvs, err)
+	}
+	for _, v := range rvs {
+		if v.RequirementID != r.ID {
+			t.Fatalf("同轮评审应解析到采纳后的需求 #%d, got #%d（记录 %s）", r.ID, v.RequirementID, v.BitableRecordID)
+		}
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, uidNew) || strings.Contains(w, "不在本地需求表") {
+			t.Fatalf("同轮引用不应告警: %#v", res.Warnings)
+		}
+	}
+}

@@ -394,6 +394,15 @@ func requirementDef() entityDef[model.Requirement] {
 			if err != nil {
 				return model.Requirement{}, err
 			}
+			// UID 采纳后必须刷新会话映射（同 create 路径）：同轮后续评审/bug/提测记录
+			// 的需求ID 列要能按新 UID 解析，否则 create-once 实体建行即空关联、永不补链。
+			// 被取代的旧 UID 不删除：其在 reqUIDToID 里的既有条目本就指向本行，保留为
+			// 会话内别名可让迁移期其他机器仍带旧 UID 的引用继续解析；别名仅存活本轮
+			//（下轮 loadMaps 按库内实盘重建），跨机残余引用由"置空+告警"收敛（README）。
+			if updated.UID != "" {
+				ss.reqIDToUID[id] = updated.UID
+				ss.reqUIDToID[updated.UID] = id
+			}
 			// 协作文档采纳落库（Create* 不含 token 列，更新路径经 SetRecordDocToken）
 			updated.FeishuDocToken = persistCollabDoc(ss, "requirement", id, r.FeishuDocToken, updated.FeishuDocToken)
 			return updated, nil
