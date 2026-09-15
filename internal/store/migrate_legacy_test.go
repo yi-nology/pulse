@@ -14,72 +14,81 @@ import (
 // ALTER TABLE requirements ADD COLUMN uid 在其后的 Go 分支才执行——老库
 // （v1.1 时代、requirements 无 uid 列）在加列前建索引直接失败
 //（"migrate: SQL logic error: no such column: uid"），pulse 完全不可用。
-// 本测试用 v1.1 时代的 schema 手工建库（requirements 无 uid 列/无索引，
-// members 无同步镜像列、projects 无 feishu_tables_json、tasks 无
-// synced_at/requirement_id——一并对齐全部容忍 ALTER 的顺序），断言：
-// 升级成功、索引存在且生效、旧数据保留可回填、二次 Open 幂等。
+// 造旧库的方式：先用当前 Open 建"新库"，再剥掉 v1.2 新增的索引/列得到
+// v1.1 形态（比手工写旧 DDL 更不易腐化）；随后断言：升级成功、索引存在且
+// 生效、旧数据保留可回填、二次 Open 幂等。
 
 var wantUIDHex = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// seedLegacyV11DB 按 v1.2 之前的 schema 手工建库并塞入旧行。
+// stripV12Features 把一个新库剥成 v1.1 形态：去掉 requirements.uid 及其唯一
+// 索引、members 的同步镜像列、projects 的 feishu_tables_json。全部为调用点
+// 内联字面量 SQL，无拼接、无变量语句。
+func stripV12Features(t *testing.T, db *sql.DB) {
+	t.Helper()
+	steps := []struct {
+		name string
+		run  func() error
+	}{
+		{"drop idx_requirements_uid", func() error {
+			_, err := db.Exec(`DROP INDEX IF EXISTS idx_requirements_uid`)
+			return err
+		}},
+		{"drop requirements.uid", func() error {
+			_, err := db.Exec(`ALTER TABLE requirements DROP COLUMN uid`)
+			return err
+		}},
+		{"drop members.bitable_record_id", func() error {
+			_, err := db.Exec(`ALTER TABLE members DROP COLUMN bitable_record_id`)
+			return err
+		}},
+		{"drop members.bitable_synced_hash", func() error {
+			_, err := db.Exec(`ALTER TABLE members DROP COLUMN bitable_synced_hash`)
+			return err
+		}},
+		{"drop projects.feishu_tables_json", func() error {
+			_, err := db.Exec(`ALTER TABLE projects DROP COLUMN feishu_tables_json`)
+			return err
+		}},
+	}
+	for _, st := range steps {
+		if err := st.run(); err != nil {
+			t.Fatalf("剥离 %s 失败: %v", st.name, err)
+		}
+	}
+}
+
+// seedLegacyV11DB 先建新库再剥离 v1.2 特性，并塞入旧行。
 func seedLegacyV11DB(t *testing.T, path string) {
 	t.Helper()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("建新库失败: %v", err)
+	}
+	actor, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateProject("demo", "演示项目", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRequirement(model.Requirement{
+		ProjectID: 1, Title: "老库需求", Status: "proposed", Priority: 3,
+	}, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRequirement(model.Requirement{
+		ProjectID: 1, Title: "老库需求二", Status: "reviewing", Priority: 2,
+	}, actor, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	ddl := []string{
-		// members：无 bitable_record_id / bitable_synced_hash（v1.1 由容忍 ALTER 补）
-		`CREATE TABLE members (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  name TEXT NOT NULL UNIQUE,
-		  type TEXT NOT NULL DEFAULT 'human' CHECK(type IN ('human','agent')),
-		  capacity_days_per_week REAL NOT NULL DEFAULT 5,
-		  notes TEXT NOT NULL DEFAULT '',
-		  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
-		)`,
-		// projects：无 feishu_tables_json（v1.1 由容忍 ALTER 补）
-		`CREATE TABLE projects (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  key TEXT NOT NULL UNIQUE,
-		  name TEXT NOT NULL DEFAULT '',
-		  description TEXT NOT NULL DEFAULT '',
-		  status TEXT NOT NULL DEFAULT 'active',
-		  feishu_doc_token TEXT NOT NULL DEFAULT '',
-		  feishu_bitable_app_token TEXT NOT NULL DEFAULT '',
-		  feishu_task_table_id TEXT NOT NULL DEFAULT '',
-		  feishu_version_table_id TEXT NOT NULL DEFAULT '',
-		  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
-		)`,
-		// requirements：无 uid 列、无 idx_requirements_uid（v1.1 实盘形态，本回归的靶心）
-		`CREATE TABLE requirements (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  project_id INTEGER NOT NULL REFERENCES projects(id),
-		  title TEXT NOT NULL,
-		  description TEXT NOT NULL DEFAULT '',
-		  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','reviewing','accepted','in_dev','delivered','rejected')),
-		  priority INTEGER NOT NULL DEFAULT 3,
-		  owner_id INTEGER REFERENCES members(id),
-		  source TEXT NOT NULL DEFAULT '',
-		  feishu_doc_token TEXT NOT NULL DEFAULT '',
-		  bitable_record_id TEXT NOT NULL DEFAULT '',
-		  bitable_synced_hash TEXT NOT NULL DEFAULT '',
-		  synced_at TEXT NOT NULL DEFAULT '',
-		  archived INTEGER NOT NULL DEFAULT 0,
-		  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
-		  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
-		)`,
-		`INSERT INTO members (name, type) VALUES ('tester', 'human')`,
-		`INSERT INTO projects (key, name) VALUES ('demo', '演示项目')`,
-		`INSERT INTO requirements (project_id, title, status, priority) VALUES (1, '老库需求', 'proposed', 3)`,
-		`INSERT INTO requirements (project_id, title, status, priority) VALUES (1, '老库需求二', 'reviewing', 2)`,
-	}
-	for _, stmt := range ddl {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("seed legacy schema: %v\nstmt: %s", err, stmt)
-		}
-	}
+	stripV12Features(t, db)
 }
 
 func TestMigrateLegacyV11Database(t *testing.T) {
