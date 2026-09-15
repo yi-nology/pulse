@@ -117,6 +117,19 @@ func (s *Store) CreateTestSubmission(v model.TestSubmission, actor model.Member,
 	return got, nil
 }
 
+// GetTestSubmission 按 ID 查询提测单；不存在时 found=false 且无错误。
+func (s *Store) GetTestSubmission(id int64) (model.TestSubmission, bool, error) {
+	row := s.db.QueryRow(`SELECT `+submissionCols+` FROM test_submissions WHERE id = ?`, id)
+	t, err := scanSubmission(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.TestSubmission{}, false, nil
+	}
+	if err != nil {
+		return model.TestSubmission{}, false, fmt.Errorf("get submission id=%d: %w", id, err)
+	}
+	return t, true, nil
+}
+
 // ListTestSubmissions 按项目列出提测单（按 id 升序）；versionID=0 表示不过滤版本。
 func (s *Store) ListTestSubmissions(projectID int64, versionID int64) ([]model.TestSubmission, error) {
 	where := []string{"project_id = ?"}

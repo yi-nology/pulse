@@ -51,13 +51,14 @@ func newReviewCmd() *cobra.Command {
 	return cmd
 }
 
-// newReviewRecordCmd 实现 `pulse review record --project K [--requirement ID] --kind ... [--conclusion pending]`。
+// newReviewRecordCmd 实现 `pulse review record --project K [--requirement ID] --kind ... [--conclusion pending] [--no-doc]`。
 func newReviewRecordCmd() *cobra.Command {
 	var projectKey, kind, conclusion string
 	var requirementID int64
+	var noDoc bool
 	cmd := &cobra.Command{
 		Use:   "record",
-		Short: "记录一次评审（conclusion 缺省 pending，held_at 缺省当前时刻）",
+		Short: "记录一次评审（conclusion 缺省 pending，held_at 缺省当前时刻；默认建纪要文档）",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkReviewKind(kind); err != nil {
@@ -96,6 +97,9 @@ func newReviewRecordCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "评审已记录: %s (id=%d)\n", v.Kind, v.ID)
+			if !noDoc { // 默认建评审纪要文档（未配置飞书时降级为提示）
+				ensureRecordDoc(cmd, s, cfg, "review", v.ID, a.Name)
+			}
 			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
@@ -104,6 +108,7 @@ func newReviewRecordCmd() *cobra.Command {
 	cmd.Flags().StringVar(&kind, "kind", "", "评审类型：requirement|release|test（必填）")
 	cmd.Flags().Int64Var(&requirementID, "requirement", 0, "关联需求 ID（可选）")
 	cmd.Flags().StringVar(&conclusion, "conclusion", "pending", "评审结论：pending|passed|passed_with_notes|rejected")
+	cmd.Flags().BoolVar(&noDoc, "no-doc", false, "跳过评审纪要文档自动创建（默认 feishu 已配置时按模板建纪要文档）")
 	_ = cmd.MarkFlagRequired("kind")
 	return cmd
 }

@@ -30,12 +30,13 @@ func newSubmissionCmd() *cobra.Command {
 	return cmd
 }
 
-// newSubmitCreateCmd 实现 `pulse submit create --project K --version v1.0 [--requirement] [--test-owner]`。
+// newSubmitCreateCmd 实现 `pulse submit create --project K --version v1.0 [--requirement] [--test-owner] [--no-doc]`。
 func newSubmitCreateCmd() *cobra.Command {
 	var projectKey, version, requirement, testOwner string
+	var noDoc bool
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "创建提测单（status 缺省 draft，提测人归当前操作者）",
+		Short: "创建提测单（status 缺省 draft，提测人归当前操作者；默认建提测单文档）",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, cfg, err := openApp()
@@ -80,6 +81,9 @@ func newSubmitCreateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "提测单已创建 (id=%d)\n", created.ID)
+			if !noDoc { // 默认建提测单文档（未配置飞书时降级为提示）
+				ensureRecordDoc(cmd, s, cfg, "test_submission", created.ID, a.Name)
+			}
 			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
@@ -88,6 +92,7 @@ func newSubmitCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&version, "version", "", "提测版本：版本 ID 整数，或项目内版本名（必填，需已创建）")
 	cmd.Flags().StringVar(&requirement, "requirement", "", "关联需求 ID（须已存在）")
 	cmd.Flags().StringVar(&testOwner, "test-owner", "", "测试负责人成员名（已有成员直接使用，不存在则按 human 创建）")
+	cmd.Flags().BoolVar(&noDoc, "no-doc", false, "跳过提测单文档自动创建（默认 feishu 已配置时按模板建提测单文档）")
 	_ = cmd.MarkFlagRequired("version")
 	return cmd
 }

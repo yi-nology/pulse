@@ -121,6 +121,25 @@ func bestEffort(cmd *cobra.Command, s *store.Store, cfg *config.Config, projectK
 	feishu.BestEffort(s, cfg, projectKey)
 }
 
+// ensureRecordDoc 供六实体 create/record 命令补建协作记录文档（spec §3.2：默认
+// create 即建文档，--no-doc 跳过）。未配置飞书或创建失败时仅向 stderr 提示
+// "已保存记录（无文档）"——记录已落库，文档创建尽力而为，不影响命令退出码
+// （与 bestEffort 同哲学）。
+func ensureRecordDoc(cmd *cobra.Command, s *store.Store, cfg *config.Config, entityKind string, id int64, actorName string) {
+	var c *feishu.Client
+	if cfg.Feishu.AppID != "" && cfg.Feishu.AppSecret != "" {
+		c = newSyncClient(cfg)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
+	defer cancel()
+	token, err := feishu.EnsureRecordDoc(ctx, c, s, entityKind, id, actorName)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "提示: 已保存记录（无文档）: %v\n", err)
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "协作文档已创建: %s\n", token)
+}
+
 // autopushForTask 供只有任务 ID、没有 --project 旗标的写命令（task update/rm/dep）
 // 接线：按任务反查所属项目后执行写后自动 push。
 func autopushForTask(cmd *cobra.Command, s *store.Store, cfg *config.Config, taskID int64) {

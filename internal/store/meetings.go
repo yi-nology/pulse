@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -61,6 +63,19 @@ func (s *Store) CreateMeeting(m model.Meeting, actor model.Member, behalf *model
 		return model.Meeting{}, fmt.Errorf("get meeting id=%d: %w", id, err)
 	}
 	return got, nil
+}
+
+// GetMeeting 按 ID 查询会议；不存在时 found=false 且无错误。
+func (s *Store) GetMeeting(id int64) (model.Meeting, bool, error) {
+	row := s.db.QueryRow(`SELECT `+meetingCols+` FROM meetings WHERE id = ?`, id)
+	m, err := scanMeeting(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Meeting{}, false, nil
+	}
+	if err != nil {
+		return model.Meeting{}, false, fmt.Errorf("get meeting id=%d: %w", id, err)
+	}
+	return m, true, nil
 }
 
 // ListMeetings 按项目列出会议（按 id 升序）。

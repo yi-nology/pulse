@@ -30,12 +30,13 @@ func newReleaseCmd() *cobra.Command {
 	return cmd
 }
 
-// newReleaseNewCmd 实现 `pulse release new --project K --version v1.0 [--manager]`。
+// newReleaseNewCmd 实现 `pulse release new --project K --version v1.0 [--manager] [--no-doc]`。
 func newReleaseNewCmd() *cobra.Command {
 	var projectKey, version, manager string
+	var noDoc bool
 	cmd := &cobra.Command{
 		Use:   "new",
-		Short: "登记一次发版（status 缺省 preparing，负责人归当前操作者）",
+		Short: "登记一次发版（status 缺省 preparing，负责人归当前操作者；默认建发版文档）",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, cfg, err := openApp()
@@ -68,6 +69,9 @@ func newReleaseNewCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "发版记录已创建 (id=%d)\n", created.ID)
+			if !noDoc { // 默认建发版记录文档（未配置飞书时降级为提示）
+				ensureRecordDoc(cmd, s, cfg, "release", created.ID, a.Name)
+			}
 			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
@@ -75,6 +79,7 @@ func newReleaseNewCmd() *cobra.Command {
 	cmd.Flags().StringVar(&projectKey, "project", "", "所属项目 key（必填）")
 	cmd.Flags().StringVar(&version, "version", "", "发版对应的版本：版本 ID 整数，或项目内版本名（必填，需已创建）")
 	cmd.Flags().StringVar(&manager, "manager", "", "发布负责人成员名（已有成员直接使用，不存在则按 human 创建）")
+	cmd.Flags().BoolVar(&noDoc, "no-doc", false, "跳过发版文档自动创建（默认 feishu 已配置时按模板建发版文档）")
 	_ = cmd.MarkFlagRequired("version")
 	return cmd
 }

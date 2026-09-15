@@ -93,6 +93,18 @@ func (s *Store) getReview(id int64) (model.Review, error) {
 	return v, nil
 }
 
+// GetReview 按 ID 查询评审；不存在时 found=false 且无错误。
+func (s *Store) GetReview(id int64) (model.Review, bool, error) {
+	v, err := s.getReview(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Review{}, false, nil
+	}
+	if err != nil {
+		return model.Review{}, false, err
+	}
+	return v, true, nil
+}
+
 // ListReviews 按项目列出评审（按 id 升序）；requirementID=0 表示不过滤需求。
 func (s *Store) ListReviews(projectID int64, requirementID int64) ([]model.Review, error) {
 	where := []string{"project_id = ?"}

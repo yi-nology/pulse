@@ -101,7 +101,7 @@ func TestRequirementAddListUpdateDoc(t *testing.T) {
 	}
 	requireEntityActivity(t, s, p.ID, "requirement", "update_status", "tester")
 
-	// doc：Task 3 前为占位输出
+	// doc：未配置飞书时降级为未绑定提示（不报错，退出码 0）
 	out, _, err = runCLI(t, "requirement", "doc", "1")
 	if err != nil {
 		t.Fatalf("requirement doc failed: %v", err)
@@ -126,5 +126,82 @@ func TestRequirementReferenceErrors(t *testing.T) {
 	}
 	if _, _, err = runCLI(t, "requirement", "add", "x", "--project", "demo", "--status", "bogus"); err == nil {
 		t.Fatal("invalid status must fail")
+	}
+}
+
+// TestRequirementDocEnsureAndDegrade：doc 命令的 get-or-create 接线——已绑定 token 时
+// 原样显示；未绑定且未配置飞书时降级为未绑定提示。add 缺省触发文档创建并降级提示，
+// --no-doc 跳过。
+func TestRequirementDocEnsureAndDegrade(t *testing.T) {
+	s, _, _ := testEnv(t)
+	if _, _, err := runCLI(t, "init", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	// add：未配置飞书 → 记录照常保存，stderr 降级提示
+	out, errOut, err := runCLI(t, "requirement", "add", "需求甲", "--project", "demo")
+	if err != nil {
+		t.Fatalf("requirement add failed: %v stderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "需求已创建: 需求甲 (id=1)") {
+		t.Fatalf("stdout %q must contain 需求已创建", out)
+	}
+	if !strings.Contains(errOut, "已保存记录（无文档）") {
+		t.Fatalf("stderr %q must contain 已保存记录（无文档）", errOut)
+	}
+	r, found, err := s.GetRequirement(1)
+	if err != nil || !found || r.FeishuDocToken != "" {
+		t.Fatalf("降级路径不得写回 token: found=%v r=%+v err=%v", found, r, err)
+	}
+	// --no-doc：跳过文档创建，无降级提示
+	if _, errOut, err = runCLI(t, "requirement", "add", "需求乙", "--project", "demo", "--no-doc"); err != nil {
+		t.Fatalf("requirement add --no-doc failed: %v stderr=%s", err, errOut)
+	}
+	if strings.Contains(errOut, "已保存记录（无文档）") {
+		t.Fatalf("--no-doc 不应有文档降级提示: %q", errOut)
+	}
+	// doc：已绑定 → 原样显示 token（不经 feishu 包，直接预置）
+	actor, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecordDocToken("requirement", 1, "docXYZ", actor, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, err = runCLI(t, "requirement", "doc", "1"); err != nil {
+		t.Fatalf("requirement doc failed: %v", err)
+	}
+	if !strings.Contains(out, "协作文档: docXYZ") {
+		t.Fatalf("stdout %q must contain 协作文档: docXYZ", out)
+	}
+}
+
+// TestRecordCommandsDocDegrade：五条 create/record 命令在未配置飞书时均降级为
+// "已保存记录（无文档）"提示——记录照常保存，命令成功。
+func TestRecordCommandsDocDegrade(t *testing.T) {
+	_, _, _ = testEnv(t)
+	if _, _, err := runCLI(t, "init", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCLI(t, "version", "add", "v1.0", "--project", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][]string{
+		{"requirement", "add", "需求", "--project", "demo"},
+		{"review", "record", "--project", "demo", "--kind", "requirement"},
+		{"meeting", "record", "周会", "--project", "demo"},
+		{"submit", "create", "--project", "demo", "--version", "v1.0"},
+		{"release", "new", "--project", "demo", "--version", "v1.0"},
+	}
+	for _, args := range cases {
+		out, errOut, err := runCLI(t, args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v stderr=%s", args, err, errOut)
+		}
+		if !strings.Contains(errOut, "已保存记录（无文档）") {
+			t.Fatalf("%v stderr %q must contain 降级提示", args, errOut)
+		}
+		if !strings.Contains(out, "已创建") && !strings.Contains(out, "已记录") {
+			t.Fatalf("%v stdout %q 应包含保存成功提示", args, out)
+		}
 	}
 }

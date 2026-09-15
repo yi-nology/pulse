@@ -90,6 +90,19 @@ func (s *Store) CreateRelease(r model.Release, actor model.Member, behalf *model
 	return got, nil
 }
 
+// GetRelease 按 ID 查询发版记录；不存在时 found=false 且无错误。
+func (s *Store) GetRelease(id int64) (model.Release, bool, error) {
+	row := s.db.QueryRow(`SELECT `+releaseCols+` FROM releases WHERE id = ?`, id)
+	r, err := scanRelease(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Release{}, false, nil
+	}
+	if err != nil {
+		return model.Release{}, false, fmt.Errorf("get release id=%d: %w", id, err)
+	}
+	return r, true, nil
+}
+
 // ListReleases 按项目列出发版记录（按 id 升序）。
 func (s *Store) ListReleases(projectID int64) ([]model.Release, error) {
 	rows, err := s.db.Query(`SELECT `+releaseCols+` FROM releases WHERE project_id = ? ORDER BY id`, projectID)

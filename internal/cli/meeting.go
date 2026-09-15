@@ -15,12 +15,13 @@ func newMeetingCmd() *cobra.Command {
 	return cmd
 }
 
-// newMeetingRecordCmd 实现 `pulse meeting record <title> --project K`。
+// newMeetingRecordCmd 实现 `pulse meeting record <title> --project K [--no-doc]`。
 func newMeetingRecordCmd() *cobra.Command {
 	var projectKey string
+	var noDoc bool
 	cmd := &cobra.Command{
 		Use:   "record <title>",
-		Short: "登记一次会议（held_at 缺省当前时刻，纪要在飞书文档协作）",
+		Short: "登记一次会议（held_at 缺省当前时刻；默认按模板建纪要文档）",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, cfg, err := openApp()
@@ -43,11 +44,15 @@ func newMeetingRecordCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "会议已记录: %s (id=%d)\n", m.Title, m.ID)
+			if !noDoc { // 默认建会议纪要文档（未配置飞书时降级为提示）
+				ensureRecordDoc(cmd, s, cfg, "meeting", m.ID, a.Name)
+			}
 			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&projectKey, "project", "", "所属项目 key（必填）")
+	cmd.Flags().BoolVar(&noDoc, "no-doc", false, "跳过会议纪要文档自动创建（默认 feishu 已配置时按模板建纪要文档）")
 	return cmd
 }
 

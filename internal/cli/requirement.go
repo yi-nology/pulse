@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhangyi/pulse/internal/feishu"
 	"github.com/zhangyi/pulse/internal/model"
 	"github.com/zhangyi/pulse/internal/store"
 )
@@ -30,13 +32,14 @@ func newRequirementCmd() *cobra.Command {
 	return cmd
 }
 
-// newRequirementAddCmd 实现 `pulse requirement add <title> --project K [--owner] [--priority] [--status proposed]`。
+// newRequirementAddCmd 实现 `pulse requirement add <title> --project K [--owner] [--priority] [--status proposed] [--no-doc]`。
 func newRequirementAddCmd() *cobra.Command {
 	var projectKey, owner, status string
 	var priority int64
+	var noDoc bool
 	cmd := &cobra.Command{
 		Use:   "add <title>",
-		Short: "创建需求（status 缺省 proposed，priority 缺省 3）",
+		Short: "创建需求（status 缺省 proposed，priority 缺省 3；默认按模板建协作文档）",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkRequirementStatus(status); err != nil {
@@ -70,6 +73,9 @@ func newRequirementAddCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "需求已创建: %s (id=%d)\n", created.Title, created.ID)
+			if !noDoc { // 默认建协作记录文档（未配置飞书时降级为提示）
+				ensureRecordDoc(cmd, s, cfg, "requirement", created.ID, a.Name)
+			}
 			bestEffort(cmd, s, cfg, p.Key) // 写后自动 push（尽力而为，失败不影响退出码）
 			return nil
 		},
@@ -78,6 +84,7 @@ func newRequirementAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&owner, "owner", "", "需求负责人成员名（已有成员直接使用，不存在则按 human 创建）")
 	cmd.Flags().Int64Var(&priority, "priority", 3, "优先级（数字越小越优先）")
 	cmd.Flags().StringVar(&status, "status", "proposed", "需求状态：proposed|reviewing|accepted|in_dev|delivered|rejected")
+	cmd.Flags().BoolVar(&noDoc, "no-doc", false, "跳过协作文档自动创建（默认 feishu 已配置时按模板建需求文档）")
 	return cmd
 }
 
@@ -174,30 +181,52 @@ func newRequirementUpdateCmd() *cobra.Command {
 	return cmd
 }
 
-// newRequirementDocCmd 实现 `pulse requirement doc <id>`。
-// TODO(v1.1-task3): EnsureRecordDoc 接线点——Task 3 落地飞书模板文档绑定后改为真实输出。
+// newRequirementDocCmd 实现 `pulse requirement doc <id>`：已绑定则显示文档 token；
+// 未绑定时按模板自动创建（EnsureRecordDoc，get-or-create），未配置飞书或创建失败时
+// 降级为未绑定提示（不报错）。
 func newRequirementDocCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doc <id>",
-		Short: "查看需求绑定的协作文档（Task 3 接入飞书模板文档）",
+		Short: "查看需求绑定的协作文档（未绑定时按模板自动创建）",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("需求 ID 须为整数，收到 %q", args[0])
 			}
-			s, _, err := openApp()
+			s, cfg, err := openApp()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
-			if _, found, err := s.GetRequirement(id); err != nil {
+			r, found, err := s.GetRequirement(id)
+			if err != nil {
 				return err
 			} else if !found {
 				return fmt.Errorf("需求不存在: id=%d", id)
 			}
-			// TODO(v1.1-task3): EnsureRecordDoc 接线点
-			fmt.Fprintln(cmd.OutOrStdout(), "文档未绑定（v1.1 Task 3 提供飞书模板文档）")
+			if r.FeishuDocToken != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "协作文档: %s\n", r.FeishuDocToken)
+				return nil
+			}
+			a, _, err := resolveActor(s, cfg, cmd)
+			if err != nil {
+				return err
+			}
+			var c *feishu.Client
+			if cfg.Feishu.AppID != "" && cfg.Feishu.AppSecret != "" {
+				c = newSyncClient(cfg)
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), syncTimeout)
+			defer cancel()
+			token, err := feishu.EnsureRecordDoc(ctx, c, s, "requirement", id, a.Name)
+			if err != nil {
+				// 记录本身无恙：降级为未绑定提示，不作为命令失败
+				fmt.Fprintf(cmd.OutOrStdout(), "文档未绑定（%v）\n", err)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "协作文档已创建: %s\n", token)
+			autopushForEntityProject(cmd, s, cfg, r.ProjectID) // token 写回后自动 push（尽力而为）
 			return nil
 		},
 	}
