@@ -217,6 +217,87 @@ func TestTaskRmArchives(t *testing.T) {
 	}
 }
 
+// TestTaskAssigneeResolvesExistingMember --assignee 先按名查成员表，命中即用
+// （不论 human/agent），未命中再按 human 创建（E2E-2："人给 agent 派活"）。
+func TestTaskAssigneeResolvesExistingMember(t *testing.T) {
+	s, _, _ := testEnv(t)
+	if _, _, err := runCLI(t, "init", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	codex, err := s.GetOrCreateMember("codex", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// (a) task add --assignee codex：codex 已是 agent → 直接指派，不报类型冲突
+	out, errOut, err := runCLI(t, "task", "add", "agent任务", "--project", "demo", "--assignee", "codex")
+	if err != nil {
+		t.Fatalf("task add --assignee codex failed: %v stderr=%s", err, errOut)
+	}
+	if want := "任务已创建: agent任务 (id=1)"; !strings.Contains(out, want) {
+		t.Fatalf("stdout %q must contain %q", out, want)
+	}
+	tk, found, err := s.GetTask(1)
+	if err != nil || !found {
+		t.Fatalf("task 1: found=%v err=%v", found, err)
+	}
+	if tk.AssigneeID != codex.ID {
+		t.Fatalf("task assignee = %d, want agent codex id %d", tk.AssigneeID, codex.ID)
+	}
+
+	// (a2) task update --assignee codex：同样命中现有 agent
+	if _, _, err := runCLI(t, "task", "add", "无主任务", "--project", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCLI(t, "task", "update", "2", "--assignee", "codex"); err != nil {
+		t.Fatalf("task update --assignee codex failed: %v", err)
+	}
+	tk, _, err = s.GetTask(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.AssigneeID != codex.ID {
+		t.Fatalf("updated task assignee = %d, want agent codex id %d", tk.AssigneeID, codex.ID)
+	}
+
+	// (b) 不存在的名字 → 仍按 human 创建（保留既有行为）
+	if _, _, err := runCLI(t, "task", "add", "human任务", "--project", "demo", "--assignee", "newbie"); err != nil {
+		t.Fatalf("task add --assignee newbie failed: %v", err)
+	}
+	tk, _, err = s.GetTask(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nb, found, err := s.GetMemberByName("newbie")
+	if err != nil || !found {
+		t.Fatalf("newbie member: found=%v err=%v", found, err)
+	}
+	if tk.AssigneeID != nb.ID || nb.Type != "human" {
+		t.Fatalf("unknown assignee must be created as human: task=%d member=%+v", tk.AssigneeID, nb)
+	}
+
+	// codex 必须仍是唯一的 agent 成员（未被二次创建成 human）
+	ms, err := s.ListMembers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var codexN, agentN int
+	for _, m := range ms {
+		if m.Name == "codex" {
+			codexN++
+			if m.Type != "agent" {
+				t.Fatalf("codex type = %q, want agent (unchanged)", m.Type)
+			}
+		}
+		if m.Type == "agent" {
+			agentN++
+		}
+	}
+	if codexN != 1 || agentN != 1 {
+		t.Fatalf("codex must stay a single agent member: codexN=%d agentN=%d members=%+v", codexN, agentN, ms)
+	}
+}
+
 func TestTaskCommandErrors(t *testing.T) {
 	_, _, _ = testEnv(t)
 	if _, _, err := runCLI(t, "init", "demo"); err != nil {

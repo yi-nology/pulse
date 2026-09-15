@@ -183,6 +183,43 @@ func TestWeeklyCompletionAndAgentContribution(t *testing.T) {
 	}
 }
 
+// TestWeeklyReopenedTaskAppearsInBothSections 完成与进行中正交可重叠（E2E-1）：
+// 本周完成过（窗口内有 to=="done" 的状态流转）但被 reopen 回 in_progress 的任务，
+// 必须同时出现在"本周完成"与"进行中"两节，而非只进其一。
+func TestWeeklyReopenedTaskAppearsInBothSections(t *testing.T) {
+	s := newStore(t)
+	p := projectOf(t, s)
+	alice := actorOf(t, s)
+
+	// 真实流转：创建(todo) → done（update_status 活动）→ reopen 回 in_progress（reopen 活动）
+	t1 := taskOf(t, s, p.ID, func(m *model.Task) { m.Title = "返工任务" })
+	done := "done"
+	if _, err := s.UpdateTask(t1.ID, store.TaskChanges{Status: &done}, alice, nil); err != nil {
+		t.Fatal(err)
+	}
+	reopened := "in_progress"
+	tk, err := s.UpdateTask(t1.ID, store.TaskChanges{Status: &reopened}, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Status != "in_progress" {
+		t.Fatalf("reopened task status = %q, want in_progress", tk.Status)
+	}
+
+	out, err := WeeklyMarkdown(s, p.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneSec := section(string(out), "本周完成")
+	if !strings.Contains(doneSec, "#1 返工任务") {
+		t.Fatalf("本周完成 must contain done-then-reopened task, got:\n%s", doneSec)
+	}
+	wip := section(string(out), "进行中")
+	if !strings.Contains(wip, "#1 返工任务") {
+		t.Fatalf("进行中 must contain done-then-reopened task, got:\n%s", wip)
+	}
+}
+
 // TestWeeklyNextWeekPlan 下周计划口径：未 done 且 start/due 落在下周自然周
 // [下周一, 下下周一) 的任务，按 due 升序（无 due 排后，再按 id）。
 // now = 2026-09-15（周二）→ 下周窗口 = [2026-09-21, 2026-09-28)。

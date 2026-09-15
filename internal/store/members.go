@@ -1,10 +1,28 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/zhangyi/pulse/internal/model"
 )
+
+// GetMemberByName 按名字精确查找成员；不存在时返回 (零值, false, nil)。
+func (s *Store) GetMemberByName(name string) (model.Member, bool, error) {
+	var m model.Member
+	err := s.db.QueryRow(
+		`SELECT id, name, type, capacity_days_per_week, notes, created_at FROM members WHERE name = ?`,
+		name,
+	).Scan(&m.ID, &m.Name, &m.Type, &m.Capacity, &m.Notes, &m.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Member{}, false, nil
+	}
+	if err != nil {
+		return model.Member{}, false, fmt.Errorf("select member %q: %w", name, err)
+	}
+	return m, true, nil
+}
 
 // GetOrCreateMember 按名字取回成员，不存在则创建；同名存在但 type 不一致时报错。
 func (s *Store) GetOrCreateMember(name, typ string) (model.Member, error) {

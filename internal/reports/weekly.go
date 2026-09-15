@@ -169,10 +169,12 @@ func WeeklyMarkdown(s *store.Store, projectID int64, now time.Time) ([]byte, err
 		completedTasks, inProgress, unscheduled []model.Task
 	)
 	for _, t := range tasks {
-		switch {
-		case completed[t.ID]:
+		// "本周完成"（窗口内有 to==done 的流转）与"进行中"（当前状态）正交可重叠：
+		// done 后又 reopen 回 in_progress 的任务须同时出现在两节，故用两个独立 if。
+		if completed[t.ID] {
 			completedTasks = append(completedTasks, t)
-		case t.Status == "in_progress":
+		}
+		if t.Status == "in_progress" {
 			inProgress = append(inProgress, t)
 		}
 		if t.DueDate == "" && t.Status != "done" {

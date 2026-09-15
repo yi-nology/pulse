@@ -50,8 +50,9 @@ func requireProjectFlag(s *store.Store, key string) (model.Project, error) {
 	return p, nil
 }
 
-// resolveAssigneeFlag 解析 --assignee：按成员名 get-or-create（human）；
-// 显式传空串表示清空负责人（返回 0）。changed=false 时返回 (nil, 0, nil)。
+// resolveAssigneeFlag 解析 --assignee：先按名查成员表，命中即用（不论 human/agent，
+// 支持"人给 agent 派活"）；未命中再按 human 创建。显式传空串表示清空负责人（返回 0）。
+// changed=false 时返回 (nil, 0, nil)。
 func resolveAssigneeFlag(s *store.Store, cmd *cobra.Command, name string) (*int64, int64, error) {
 	if !cmd.Flags().Changed("assignee") {
 		return nil, 0, nil
@@ -60,9 +61,15 @@ func resolveAssigneeFlag(s *store.Store, cmd *cobra.Command, name string) (*int6
 		zero := int64(0)
 		return &zero, 0, nil
 	}
-	m, err := s.GetOrCreateMember(name, "human")
+	m, found, err := s.GetMemberByName(name)
 	if err != nil {
 		return nil, 0, err
+	}
+	if !found {
+		m, err = s.GetOrCreateMember(name, "human")
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	return &m.ID, m.ID, nil
 }
@@ -173,7 +180,7 @@ func newTaskAddCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&projectKey, "project", "", "所属项目 key（必填）")
-	cmd.Flags().StringVar(&assignee, "assignee", "", "负责人成员名（不存在则按 human 创建）")
+	cmd.Flags().StringVar(&assignee, "assignee", "", "负责人成员名（已有成员直接使用，不存在则按 human 创建）")
 	cmd.Flags().StringVar(&status, "status", "todo", "任务状态：backlog|todo|in_progress|blocked|done")
 	cmd.Flags().Int64Var(&priority, "priority", 3, "优先级（数字越小越优先）")
 	cmd.Flags().Float64Var(&estimate, "estimate", 0, "预估人日")
@@ -332,7 +339,7 @@ func newTaskUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "新标题")
 	cmd.Flags().StringVar(&desc, "desc", "", "任务描述")
 	cmd.Flags().StringVar(&status, "status", "", "任务状态：backlog|todo|in_progress|blocked|done")
-	cmd.Flags().StringVar(&assignee, "assignee", "", "负责人成员名（human，不存在则创建；传空串清空）")
+	cmd.Flags().StringVar(&assignee, "assignee", "", "负责人成员名（已有成员直接使用，不存在则按 human 创建；传空串清空）")
 	cmd.Flags().Int64Var(&priority, "priority", 3, "优先级（数字越小越优先）")
 	cmd.Flags().Float64Var(&estimate, "estimate", 0, "预估人日")
 	cmd.Flags().StringVar(&start, "start", "", "开始日期 YYYY-MM-DD")

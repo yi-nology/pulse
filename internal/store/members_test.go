@@ -22,6 +22,24 @@ func TestGetOrCreateMemberIdempotent(t *testing.T) {
 	}
 }
 
+func TestGetMemberByName(t *testing.T) {
+	s := openTest(t)
+	if _, found, err := s.GetMemberByName("ghost"); err != nil || found {
+		t.Fatalf("missing member: found=%v err=%v", found, err)
+	}
+	m, err := s.GetOrCreateMember("codex", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.GetMemberByName("codex")
+	if err != nil || !found {
+		t.Fatalf("existing member: found=%v err=%v", found, err)
+	}
+	if got.ID != m.ID || got.Type != "agent" {
+		t.Fatalf("got %+v, want id=%d type=agent", got, m.ID)
+	}
+}
+
 func TestSetMemberCapacity(t *testing.T) {
 	s := openTest(t)
 	m, err := s.GetOrCreateMember("alice", "agent")
