@@ -16,7 +16,16 @@ import (
 // deprecatedHash 与 sync.go 的软删墓碑标记一致（bitable_synced_hash 的终态值）。
 const deprecatedHash = "deprecated"
 
-// syncEnv 在 openStore 基础上补齐 sync 所需：绑定 token 的项目 + tester 成员。
+// v11Tables 与 bind 建表/fakeAPI.TableCreate 派发的六实体表 id 一致。
+func v11Tables() store.FeishuTables {
+	return store.FeishuTables{
+		Requirements: "tblReq", Reviews: "tblReview", Meetings: "tblMeeting",
+		Bugs: "tblBug", TestSubmissions: "tblSubmit", Releases: "tblRelease",
+	}
+}
+
+// syncEnv 在 openStore 基础上补齐 sync 所需：绑定 token 的项目 + tester 成员 +
+// v1.1 六实体表 id（feishu_tables_json）。
 func syncEnv(t *testing.T) (*store.Store, model.Project, model.Member) {
 	t.Helper()
 	s, p := openStore(t)
@@ -24,6 +33,9 @@ func syncEnv(t *testing.T) (*store.Store, model.Project, model.Member) {
 	p.FeishuTaskTableID = "tblTask"
 	p.FeishuVersionTableID = "tblVer"
 	if err := s.SaveProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveFeishuTables(p.ID, v11Tables()); err != nil {
 		t.Fatal(err)
 	}
 	m, err := s.GetOrCreateMember("tester", "human")

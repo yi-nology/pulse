@@ -50,11 +50,18 @@ func (f *fakeAPI) AppCreate(ctx context.Context, name string) (string, error) {
 	return "appT", nil
 }
 
+// fakeTableIDs 按表名给 TableCreate 派发稳定假 id（bind/sync 测试按表脚本化依赖它）。
+var fakeTableIDs = map[string]string{
+	"任务表": "tblTask", "版本表": "tblVer",
+	"需求表": "tblReq", "评审表": "tblReview", "会议表": "tblMeeting",
+	"bug表": "tblBug", "提测表": "tblSubmit", "发版表": "tblRelease",
+}
+
 func (f *fakeAPI) TableCreate(ctx context.Context, appToken, name string, fields []Field) (string, error) {
 	f.record("TableCreate", appToken, name)
-	id := "tblVer"
-	if name == "任务表" {
-		id = "tblTask"
+	id, ok := fakeTableIDs[name]
+	if !ok {
+		id = "tblVer"
 	}
 	f.calls[len(f.calls)-1].fields = fields
 	return id, nil
@@ -152,7 +159,8 @@ func wantFields(t *testing.T, got []Field, want []Field) {
 }
 
 // TestBindCreatesBaseTablesViewDocAndSavesTokens：bind 按序调用
-// AppCreate→TableCreate×2→ViewCreate→DocCreate，并把全部 token 经 SaveProject 写回。
+// AppCreate→TableCreate×8→ViewCreate→DocCreate，并把全部 token 经 SaveProject/
+// SaveFeishuTables 写回。
 func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	s, p := openStore(t)
 	fake := &fakeAPI{}
@@ -163,8 +171,10 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 		t.Fatalf("Bind: %v", err)
 	}
 
-	// 调用序列与参数
-	wantSeq := []string{"AppCreate", "TableCreate", "TableCreate", "ViewCreate", "DocCreate"}
+	// 调用序列与参数：任务表→版本表→甘特视图→六实体表×6→沉淀文档
+	wantSeq := []string{"AppCreate", "TableCreate", "TableCreate", "ViewCreate",
+		"TableCreate", "TableCreate", "TableCreate", "TableCreate", "TableCreate", "TableCreate",
+		"DocCreate"}
 	if len(fake.calls) != len(wantSeq) {
 		t.Fatalf("调用数 = %d, want %d: %+v", len(fake.calls), len(wantSeq), fake.calls)
 	}
@@ -195,8 +205,21 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	if got := fake.calls[3].args; got[0] != "appT" || got[1] != "tblTask" || got[2] != "甘特" || got[3] != "gantt" {
 		t.Fatalf("ViewCreate 参数 = %+v, want appT/tblTask/甘特/gantt", got)
 	}
+	// 六实体表：表名按序、需求表字段精确（全 text + 已废弃 checkbox + updated_by）
+	wantNames := []string{"需求表", "评审表", "会议表", "bug表", "提测表", "发版表"}
+	for i, name := range wantNames {
+		call := fake.calls[4+i]
+		if call.args[1] != name {
+			t.Fatalf("六实体表[%d] = %q, want %q", i, call.args[1], name)
+		}
+	}
+	wantFields(t, fake.calls[4].fields, []Field{
+		{Name: "需求名", Type: 1}, {Name: "状态", Type: 1}, {Name: "负责人", Type: 1},
+		{Name: "优先级", Type: 1}, {Name: "描述", Type: 1},
+		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
+	})
 	// 文档建在根目录，标题含项目名
-	if got := fake.calls[4].args; got[0] != "" || !strings.Contains(got[1], "演示项目") {
+	if got := fake.calls[10].args; got[0] != "" || !strings.Contains(got[1], "演示项目") {
 		t.Fatalf("DocCreate 参数 = %+v, want 根目录 + 含项目名标题", got)
 	}
 
@@ -215,6 +238,16 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	}
 	if saved != wantP {
 		t.Fatalf("SaveProject 落库 = %+v, want %+v", saved, wantP)
+	}
+	// 六实体表 id 落 feishu_tables_json
+	tables, err := s.GetFeishuTables(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTables := store.FeishuTables{Requirements: "tblReq", Reviews: "tblReview",
+		Meetings: "tblMeeting", Bugs: "tblBug", TestSubmissions: "tblSubmit", Releases: "tblRelease"}
+	if tables != wantTables {
+		t.Fatalf("feishu_tables_json = %+v, want %+v", tables, wantTables)
 	}
 	if warn.Len() != 0 {
 		t.Fatalf("正常路径不应有警告: %q", warn.String())
@@ -255,10 +288,13 @@ func TestBindViewCreateFailureWarnsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ViewCreate 失败不应中断 bind: %v", err)
 	}
-	for i, m := range []string{"AppCreate", "TableCreate", "TableCreate", "ViewCreate", "DocCreate"} {
+	for i, m := range []string{"AppCreate", "TableCreate", "TableCreate", "ViewCreate"} {
 		if fake.calls[i].method != m {
 			t.Fatalf("调用[%d] = %s, want %s", i, fake.calls[i].method, m)
 		}
+	}
+	if fake.calls[10].method != "DocCreate" {
+		t.Fatalf("DocCreate 位置 = %s, want DocCreate（完整序列 %+v）", fake.calls[10].method, fake.calls)
 	}
 	if !strings.Contains(warn.String(), "甘特") {
 		t.Fatalf("警告应提及甘特视图, got %q", warn.String())

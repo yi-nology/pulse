@@ -2,8 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/zhangyi/pulse/internal/model"
 )
@@ -90,6 +92,57 @@ func (s *Store) SaveProject(p model.Project) error {
 	}
 	if n, err := res.RowsAffected(); err == nil && n == 0 {
 		return fmt.Errorf("save project: 项目不存在 id=%d", p.ID)
+	}
+	return nil
+}
+
+// FeishuTables 是 v1.1 研发交付闭环六实体的 bitable 表 id 集合，整体落
+// projects.feishu_tables_json（一个 JSON 列而非 6 个新列；既有 task/version 表 id
+// 保持独立列不动，向后兼容）。零值 = 项目未配置六实体表（旧项目/采用既有 base 的
+// bind 模式），sync 据此跳过六实体、只同步任务与版本，不报错。
+type FeishuTables struct {
+	Requirements    string `json:"requirements"`
+	Reviews         string `json:"reviews"`
+	Meetings        string `json:"meetings"`
+	Bugs            string `json:"bugs"`
+	TestSubmissions string `json:"test_submissions"`
+	Releases        string `json:"releases"`
+}
+
+// GetFeishuTables 读取项目的六实体表 id；值为空（旧项目）返回零值且不报错。
+// JSON 损坏属数据异常，原样返回错误（由调用方决定跳过或告警）。
+func (s *Store) GetFeishuTables(projectID int64) (FeishuTables, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT feishu_tables_json FROM projects WHERE id = ?`, projectID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FeishuTables{}, fmt.Errorf("get feishu tables: 项目不存在 id=%d", projectID)
+	}
+	if err != nil {
+		return FeishuTables{}, fmt.Errorf("get feishu tables id=%d: %w", projectID, err)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return FeishuTables{}, nil
+	}
+	var t FeishuTables
+	if err := json.Unmarshal([]byte(raw), &t); err != nil {
+		return FeishuTables{}, fmt.Errorf("get feishu tables id=%d: feishu_tables_json 损坏: %w", projectID, err)
+	}
+	return t, nil
+}
+
+// SaveFeishuTables 写回项目的六实体表 id（bind 建完六表后调用）；项目不存在时报错。
+// 只更新 feishu_tables_json 单列，不触碰既有 token 列。
+func (s *Store) SaveFeishuTables(projectID int64, t FeishuTables) error {
+	b, err := json.Marshal(t)
+	if err != nil { // 字段均为 string，理论不可达
+		return fmt.Errorf("save feishu tables id=%d: %w", projectID, err)
+	}
+	res, err := s.db.Exec(`UPDATE projects SET feishu_tables_json = ? WHERE id = ?`, string(b), projectID)
+	if err != nil {
+		return fmt.Errorf("save feishu tables id=%d: %w", projectID, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("save feishu tables: 项目不存在 id=%d", projectID)
 	}
 	return nil
 }

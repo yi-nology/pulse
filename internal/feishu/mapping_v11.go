@@ -1,0 +1,395 @@
+// mapping_v11.go 定义 v1.1 研发交付闭环六实体与 Bitable 字段的双向映射。
+// 约定与 mapping.go 的任务表完全一致（brief §6）：
+//   - 往返一致（XToFields ∘ FieldsToX = id）是自回声判定的根基，两端必须产出
+//     完全相同的键集合与 JSON 类型（文本列 string、复选框 bool）；
+//   - 远端缺必填字段 → missing 非空（整条跳过并告警）；未知字段 → 告警忽略；
+//   - updated_by 列 bind 时创建但不参与同步（不计入指纹），远端出现时静默忽略；
+//   - 人员列（负责人/提测人/测试负责人/发布负责人）按成员名解析，查不到保留原值并告警
+//     （sync 侧已对远端提到的人名先行 get-or-create）；版本列（发现版本/版本）按版本名解析；
+//   - 评审的 评审类型/评审时间/需求ID、会议的 会议标题/时间、发版的 发布时间 为
+//     "创建即定"字段：store 无对应更新路径，base 已有值时保留本地值、远端不一致仅告警；
+//     base 为零值（合入全新远端行）时采用远端值。
+package feishu
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/zhangyi/pulse/internal/model"
+)
+
+// —— 需求 ————————————————————————————————————————————————————————————————
+
+// RequirementToFields 把本地需求映射为 Bitable 字段（与 bind 建表列对应）。
+func RequirementToFields(r model.Requirement, memberNameByID map[int64]string) map[string]any {
+	return map[string]any{
+		"需求名": r.Title,
+		"状态":  r.Status,
+		"负责人": memberNameByID[r.OwnerID],
+		"优先级": strconv.Itoa(r.Priority),
+		"描述":  r.Description,
+		"已废弃": r.Archived,
+	}
+}
+
+var requirementRequiredFields = []string{"需求名", "状态", "优先级"}
+
+var requirementFieldSet = map[string]bool{
+	"需求名": true, "状态": true, "负责人": true, "优先级": true, "描述": true, "已废弃": true,
+}
+
+// FieldsToRequirement 把远端字段映射到本地需求的变更（local 提供未映射字段的底值，
+// 如 Source 本地独有、Archived 不被远端内容覆盖）。
+func FieldsToRequirement(f map[string]any, local model.Requirement, memberIDByName map[string]int64) (changed model.Requirement, missing []string, warnings []string) {
+	changed = local
+	for _, k := range requirementRequiredFields {
+		if _, ok := f[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return local, missing, nil
+	}
+	changed.Title = toText(f["需求名"])
+	changed.Status = toText(f["状态"])
+	if v, ok := f["负责人"]; ok {
+		name := toText(v)
+		if name == "" {
+			changed.OwnerID = 0
+		} else if id, ok := memberIDByName[name]; ok {
+			changed.OwnerID = id
+		} else {
+			warnings = append(warnings, fmt.Sprintf("负责人 %q 不在本地成员表，保留原负责人", name))
+		}
+	}
+	if v, ok := f["优先级"]; ok {
+		if n, err := strconv.Atoi(toText(v)); err == nil {
+			changed.Priority = n
+		} else {
+			warnings = append(warnings, fmt.Sprintf("优先级 %q 无法解析为整数，保留原值", toText(v)))
+		}
+	}
+	if v, ok := f["描述"]; ok {
+		changed.Description = toText(v)
+	}
+	warnings = append(warnings, unknownFieldWarnings(f, requirementFieldSet)...)
+	return changed, nil, warnings
+}
+
+// —— 评审 ————————————————————————————————————————————————————————————————
+
+// ReviewToFields 把本地评审映射为 Bitable 字段；需求ID 列是本地需求 id 的文本
+// （跨机不联动解析，合入时本地不存在该需求则置空，见 sync 侧适配器）。
+func ReviewToFields(v model.Review) map[string]any {
+	reqRef := ""
+	if v.RequirementID > 0 {
+		reqRef = strconv.FormatInt(v.RequirementID, 10)
+	}
+	return map[string]any{
+		"评审类型": v.Kind,
+		"结论":   v.Conclusion,
+		"评审时间": v.HeldAt,
+		"需求ID": reqRef,
+		"已废弃":  v.Archived,
+	}
+}
+
+var reviewRequiredFields = []string{"评审类型", "结论"}
+
+var reviewFieldSet = map[string]bool{
+	"评审类型": true, "结论": true, "评审时间": true, "需求ID": true, "已废弃": true,
+}
+
+// FieldsToReview 把远端字段映射到本地评审的变更；仅 结论 可远端合入（sync 侧经
+// UpdateReviewConclusion 落库并落活动），评审类型/评审时间/需求ID 创建即定。
+func FieldsToReview(f map[string]any, local model.Review) (changed model.Review, missing []string, warnings []string) {
+	changed = local
+	for _, k := range reviewRequiredFields {
+		if _, ok := f[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return local, missing, nil
+	}
+	changed.Kind = adoptImmutable(local.Kind, toText(f["评审类型"]), "评审类型", &warnings)
+	changed.Conclusion = toText(f["结论"])
+	changed.HeldAt = adoptImmutable(local.HeldAt, toText(f["评审时间"]), "评审时间", &warnings)
+	if v, ok := f["需求ID"]; ok {
+		text := toText(v)
+		if text == "" {
+			if local.RequirementID == 0 {
+				changed.RequirementID = 0
+			} else {
+				warnings = append(warnings, "远端需求ID 为空，保留本地关联")
+			}
+		} else if rid, err := strconv.ParseInt(text, 10, 64); err == nil {
+			changed.RequirementID = adoptImmutableID(local.RequirementID, rid, "需求ID", &warnings)
+		} else {
+			warnings = append(warnings, fmt.Sprintf("需求ID %q 无法解析为整数，保留原关联", text))
+		}
+	}
+	warnings = append(warnings, unknownFieldWarnings(f, reviewFieldSet)...)
+	return changed, nil, warnings
+}
+
+// —— 会议 ————————————————————————————————————————————————————————————————
+
+// MeetingToFields 把本地会议映射为 Bitable 字段。
+func MeetingToFields(m model.Meeting) map[string]any {
+	return map[string]any{
+		"会议标题": m.Title,
+		"时间":   m.HeldAt,
+		"已废弃":  m.Archived,
+	}
+}
+
+var meetingRequiredFields = []string{"会议标题"}
+
+var meetingFieldSet = map[string]bool{"会议标题": true, "时间": true, "已废弃": true}
+
+// FieldsToMeeting 把远端字段映射到本地会议的变更；会议标题/时间创建即定
+// （会议无更新路径，sync 侧仅建行与墓碑，远端修改吸收不回流）。
+func FieldsToMeeting(f map[string]any, local model.Meeting) (changed model.Meeting, missing []string, warnings []string) {
+	changed = local
+	for _, k := range meetingRequiredFields {
+		if _, ok := f[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return local, missing, nil
+	}
+	changed.Title = adoptImmutable(local.Title, toText(f["会议标题"]), "会议标题", &warnings)
+	if v, ok := f["时间"]; ok {
+		changed.HeldAt = adoptImmutable(local.HeldAt, toText(v), "时间", &warnings)
+	}
+	warnings = append(warnings, unknownFieldWarnings(f, meetingFieldSet)...)
+	return changed, nil, warnings
+}
+
+// —— bug —————————————————————————————————————————————————————————————————
+
+// BugToFields 把本地 bug 映射为 Bitable 字段（严重级 1..4 落文本列）。
+func BugToFields(b model.Bug, memberNameByID, versionNameByID map[int64]string) map[string]any {
+	return map[string]any{
+		"标题":   b.Title,
+		"严重级":  strconv.Itoa(b.Severity),
+		"状态":   b.Status,
+		"负责人":  memberNameByID[b.AssigneeID],
+		"发现版本": versionNameByID[b.FoundVersionID],
+		"已废弃":  b.Archived,
+	}
+}
+
+var bugRequiredFields = []string{"标题", "严重级", "状态"}
+
+var bugFieldSet = map[string]bool{
+	"标题": true, "严重级": true, "状态": true, "负责人": true, "发现版本": true, "已废弃": true,
+}
+
+// FieldsToBug 把远端字段映射到本地 bug 的变更（Description/RequirementID/FixTaskID
+// 本地独有，不被远端内容覆盖）。
+func FieldsToBug(f map[string]any, local model.Bug, memberIDByName, versionIDByName map[string]int64) (changed model.Bug, missing []string, warnings []string) {
+	changed = local
+	for _, k := range bugRequiredFields {
+		if _, ok := f[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return local, missing, nil
+	}
+	changed.Title = toText(f["标题"])
+	changed.Status = toText(f["状态"])
+	if v, ok := f["严重级"]; ok {
+		if n, err := strconv.Atoi(toText(v)); err == nil && n >= 1 && n <= 4 {
+			changed.Severity = n
+		} else {
+			warnings = append(warnings, fmt.Sprintf("严重级 %q 无法解析为 1..4，保留原值", toText(v)))
+		}
+	}
+	if v, ok := f["负责人"]; ok {
+		name := toText(v)
+		if name == "" {
+			changed.AssigneeID = 0
+		} else if id, ok := memberIDByName[name]; ok {
+			changed.AssigneeID = id
+		} else {
+			warnings = append(warnings, fmt.Sprintf("负责人 %q 不在本地成员表，保留原负责人", name))
+		}
+	}
+	if v, ok := f["发现版本"]; ok {
+		vname := toText(v)
+		if vname == "" {
+			changed.FoundVersionID = 0
+		} else if vid, ok := versionIDByName[vname]; ok {
+			changed.FoundVersionID = vid
+		} else {
+			warnings = append(warnings, fmt.Sprintf("版本 %q 不在本地版本表，保留原版本", vname))
+		}
+	}
+	warnings = append(warnings, unknownFieldWarnings(f, bugFieldSet)...)
+	return changed, nil, warnings
+}
+
+// —— 提测单 ————————————————————————————————————————————————————————————————
+
+// SubmissionToFields 把本地提测单映射为 Bitable 字段。
+func SubmissionToFields(t model.TestSubmission, memberNameByID, versionNameByID map[int64]string) map[string]any {
+	return map[string]any{
+		"版本":    versionNameByID[t.VersionID],
+		"状态":    t.Status,
+		"提测人":   memberNameByID[t.SubmittedBy],
+		"测试负责人": memberNameByID[t.TestOwnerID],
+		"范围":    t.Scope,
+		"已废弃":   t.Archived,
+	}
+}
+
+var submissionRequiredFields = []string{"版本", "状态"}
+
+var submissionFieldSet = map[string]bool{
+	"版本": true, "状态": true, "提测人": true, "测试负责人": true, "范围": true, "已废弃": true,
+}
+
+// FieldsToSubmission 把远端字段映射到本地提测单的变更（RequirementID 本地独有；
+// submitted_at/concluded_at 为 store 派生值，不随远端内容覆盖）。
+func FieldsToSubmission(f map[string]any, local model.TestSubmission, memberIDByName, versionIDByName map[string]int64) (changed model.TestSubmission, missing []string, warnings []string) {
+	changed = local
+	for _, k := range submissionRequiredFields {
+		if _, ok := f[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return local, missing, nil
+	}
+	changed.Status = toText(f["状态"])
+	if v, ok := f["版本"]; ok {
+		vname := toText(v)
+		if vname == "" {
+			changed.VersionID = 0
+		} else if vid, ok := versionIDByName[vname]; ok {
+			changed.VersionID = vid
+		} else {
+			warnings = append(warnings, fmt.Sprintf("版本 %q 不在本地版本表，保留原版本", vname))
+		}
+	}
+	changed.SubmittedBy = resolveMemberFromField(f, "提测人", local.SubmittedBy, memberIDByName, &warnings)
+	changed.TestOwnerID = resolveMemberFromField(f, "测试负责人", local.TestOwnerID, memberIDByName, &warnings)
+	if v, ok := f["范围"]; ok {
+		changed.Scope = toText(v)
+	}
+	warnings = append(warnings, unknownFieldWarnings(f, submissionFieldSet)...)
+	return changed, nil, warnings
+}
+
+// —— 发版记录 ———————————————————————————————————————————————————————————————
+
+// ReleaseToFields 把本地发版记录映射为 Bitable 字段。
+func ReleaseToFields(r model.Release, memberNameByID, versionNameByID map[int64]string) map[string]any {
+	return map[string]any{
+		"版本":    versionNameByID[r.VersionID],
+		"状态":    r.Status,
+		"发布负责人": memberNameByID[r.ReleaseManagerID],
+		"发布时间":  r.ReleasedAt,
+		"备注":    r.Notes,
+		"已废弃":   r.Archived,
+	}
+}
+
+var releaseRequiredFields = []string{"版本", "状态"}
+
+var releaseFieldSet = map[string]bool{
+	"版本": true, "状态": true, "发布负责人": true, "发布时间": true, "备注": true, "已废弃": true,
+}
+
+// FieldsToRelease 把远端字段映射到本地发版的变更；发布时间创建即定（store 在进入
+// released 时自动补记，不随远端内容覆盖）。
+func FieldsToRelease(f map[string]any, local model.Release, memberIDByName, versionIDByName map[string]int64) (changed model.Release, missing []string, warnings []string) {
+	changed = local
+	for _, k := range releaseRequiredFields {
+		if _, ok := f[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return local, missing, nil
+	}
+	changed.Status = toText(f["状态"])
+	if v, ok := f["版本"]; ok {
+		vname := toText(v)
+		if vname == "" {
+			changed.VersionID = 0
+		} else if vid, ok := versionIDByName[vname]; ok {
+			changed.VersionID = vid
+		} else {
+			warnings = append(warnings, fmt.Sprintf("版本 %q 不在本地版本表，保留原版本", vname))
+		}
+	}
+	changed.ReleaseManagerID = resolveMemberFromField(f, "发布负责人", local.ReleaseManagerID, memberIDByName, &warnings)
+	if v, ok := f["发布时间"]; ok {
+		changed.ReleasedAt = adoptImmutable(local.ReleasedAt, toText(v), "发布时间", &warnings)
+	}
+	if v, ok := f["备注"]; ok {
+		changed.Notes = toText(v)
+	}
+	warnings = append(warnings, unknownFieldWarnings(f, releaseFieldSet)...)
+	return changed, nil, warnings
+}
+
+// —— 共用小工具 ————————————————————————————————————————————————————————————
+
+// adoptImmutable 是"创建即定"文本字段的合入规则：base 为空（合入全新远端行）时采用
+// 远端值；base 已有值时保留本地值，远端给出不同值仅告警（store 无该字段的更新路径）。
+func adoptImmutable(base, remote, field string, warnings *[]string) string {
+	if base == "" {
+		return remote
+	}
+	if remote != "" && remote != base {
+		*warnings = append(*warnings, fmt.Sprintf("%s %q 为创建即定字段，保留本地值 %q", field, remote, base))
+	}
+	return base
+}
+
+// adoptImmutableID 是"创建即定"引用列（需求ID）的合入规则，语义同 adoptImmutable。
+func adoptImmutableID(base, remote int64, field string, warnings *[]string) int64 {
+	if base == 0 {
+		return remote
+	}
+	if remote != 0 && remote != base {
+		*warnings = append(*warnings, fmt.Sprintf("%s #%d 为创建即定字段，保留本地关联 #%d", field, remote, base))
+	}
+	return base
+}
+
+// resolveMemberFromField 把远端人员列解析为成员 ID：空值清空；已知名解析；未知名
+// 保留原值并告警（sync 侧已对远端提到的人名先行 get-or-create，此处兜底防御）。
+func resolveMemberFromField(f map[string]any, column string, local int64, memberIDByName map[string]int64, warnings *[]string) int64 {
+	v, ok := f[column]
+	if !ok {
+		return local
+	}
+	name := toText(v)
+	if name == "" {
+		return 0
+	}
+	if id, ok := memberIDByName[name]; ok {
+		return id
+	}
+	*warnings = append(*warnings, fmt.Sprintf("%s %q 不在本地成员表，保留原值", column, name))
+	return local
+}
+
+// unknownFieldWarnings 识别映射集合之外的字段（updated_by 为 pulse 自建、不参与同步的
+// 列，静默忽略；其余视为有人在 Bitable 手改表结构，告警忽略）。
+func unknownFieldWarnings(f map[string]any, fieldSet map[string]bool) []string {
+	var warnings []string
+	for k := range f {
+		if _, mapped := fieldSet[k]; !mapped && k != "updated_by" {
+			warnings = append(warnings, fmt.Sprintf("未知字段 %q 已忽略（可能有人在 Bitable 手改了表结构）", k))
+		}
+	}
+	return warnings
+}

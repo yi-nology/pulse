@@ -77,17 +77,23 @@ func MarkSyncedRecord(s *store.Store, entity string, id int64, recordID, hash st
 	return s.MarkSyncedRecord(entity, id, recordID, hash)
 }
 
-// SyncProject 对单个项目执行完整同步：push（版本→任务）→ pull（版本→任务）。
-// 单行推送失败不中断（记 Warnings 继续补推其余行，dirty 标记保留待下轮重试）；
-// pull 的搜索失败视为本轮失败返回错误（幂等可重跑）。
+// SyncProject 对单个项目执行完整同步：push（版本→任务→六实体）→ pull（版本→任务→六实体）。
+// 六实体表 id 取自 projects.feishu_tables_json（旧项目/采用既有 base 的 bind 未配置时
+// 为零值，六实体整体跳过，行为与 v1.0 一致）。单行推送失败不中断（记 Warnings 继续
+// 补推其余行，dirty 标记保留待下轮重试）；pull 的搜索失败视为本轮失败返回错误（幂等可重跑）。
 func SyncProject(ctx context.Context, c *Client, s *store.Store, p model.Project, actor model.Member) (SyncResult, error) {
 	res := SyncResult{}
 	ss := &syncSession{
 		ctx: ctx, api: c.API(), s: s, p: p, actor: actor, res: &res,
 		idToName: map[int64]string{}, nameToID: map[string]int64{},
 		verIDToName: map[int64]string{}, verNameToID: map[string]int64{},
+		entityAncestors: map[string]map[int64]string{},
 	}
 	if err := ss.loadMaps(); err != nil {
+		return res, err
+	}
+	tables, err := s.GetFeishuTables(p.ID)
+	if err != nil {
 		return res, err
 	}
 	// 冲突判定的共同基线必须在 push 之前快照：push 会把脏行的 synced_hash 改成
@@ -95,17 +101,32 @@ func SyncProject(ctx context.Context, c *Client, s *store.Store, p model.Project
 	if err := ss.snapshotAncestors(); err != nil {
 		return res, err
 	}
+	for _, step := range entityAncestorSteps(ss, tables) {
+		if err := step(); err != nil {
+			return res, err
+		}
+	}
 	if err := ss.pushVersions(); err != nil {
 		return res, err
 	}
 	if err := ss.pushTasks(); err != nil {
 		return res, err
 	}
+	for _, step := range entityPushSteps(ss, tables) {
+		if err := step(); err != nil {
+			return res, err
+		}
+	}
 	if err := ss.pullVersions(); err != nil {
 		return res, err
 	}
 	if err := ss.pullTasks(); err != nil {
 		return res, err
+	}
+	for _, step := range entityPullSteps(ss, tables) {
+		if err := step(); err != nil {
+			return res, err
+		}
 	}
 	if err := SetSyncState(s, lastPullKey(p.ID), strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
 		return res, fmt.Errorf("记录 last_pull 失败: %w", err)
@@ -130,6 +151,9 @@ type syncSession struct {
 
 	taskAncestor    map[int64]string // 本轮 push 前的 synced_hash 快照（LWW 共同基线）
 	versionAncestor map[int64]string
+	// 六实体的祖先指纹快照，按实体名索引（"requirement" 等）；
+	// 仅 feishu_tables_json 已配置对应表的实体才有快照。
+	entityAncestors map[string]map[int64]string
 }
 
 // snapshotAncestors 在 push 之前记下每行的 synced_hash，作为 pull 冲突判定的共同基线。

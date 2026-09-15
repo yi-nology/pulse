@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS projects (
   feishu_bitable_app_token TEXT NOT NULL DEFAULT '',
   feishu_task_table_id TEXT NOT NULL DEFAULT '',
   feishu_version_table_id TEXT NOT NULL DEFAULT '',
+  feishu_tables_json TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
 );
 CREATE TABLE IF NOT EXISTS versions (
@@ -227,6 +228,13 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN requirement_id INTEGER`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate add tasks.requirement_id: %w", err)
+	}
+	// 既有库升级：为 projects 补 feishu_tables_json（v1.1 六实体的 bitable 表 id 集合，
+	// 一个 JSON 列而非 6 个新列；既有 task/version 表 id 保持独立列不动）。新建库的
+	// schema 已含该列，ALTER 报 duplicate column 属预期，容忍即可。
+	if _, err := s.db.Exec(`ALTER TABLE projects ADD COLUMN feishu_tables_json TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate add projects.feishu_tables_json: %w", err)
 	}
 	return nil
 }
