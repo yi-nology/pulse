@@ -311,10 +311,13 @@ func (ss *syncSession) markPulled(entity string, id int64, recordID, hash string
 
 // timeoutCreateReconcile 是 RecordCreate 超时防重复核对（REAL-2）：创建请求超时类
 // 失败时服务端可能已成功写入，客户端却拿不到 record_id，盲目重试会建重复行。
-// 立即对该表做一次 RecordSearch，按 ContentHash 归一化后内容精确匹配（同表内字段
-// 完全一致的记录）→ 命中返回其 record_id 供正常回填；未命中或核对本身失败返回空串
-// （维持原失败语义：告警 + dirty 保留）。非超时错误不触发核对（调用方保证）。
-func (ss *syncSession) timeoutCreateReconcile(appToken, tableID string, fields map[string]any) string {
+// 立即对该表做一次 RecordSearch，对每条候选记录先经 normalize 归一化再按 ContentHash
+// 精确比对（fields 是本次 push 的归一化字段）→ 命中返回其 record_id 供正常回填；
+// 未命中或核对本身失败返回空串（维持原失败语义：告警 + dirty 保留）。
+// 非超时错误不触发核对（调用方保证）。normalize 必须与 push/echo 哈希同构——真实租户
+// text 列读回是富文本数组，原始 fields 直接哈希恒不匹配（调用点按实体传入与 pull 回声
+// 判定同一条 fromFields→toFields 往返；成员表无反向适配器，退化为逐值 flattenRichText）。
+func (ss *syncSession) timeoutCreateReconcile(appToken, tableID string, fields map[string]any, normalize func(map[string]any) map[string]any) string {
 	recs, err := ss.api.RecordSearch(ss.ctx, appToken, tableID)
 	if err != nil {
 		ss.warn("创建超时后核对 %s 失败（恢复后可补推）: %v", tableID, err)
@@ -322,11 +325,21 @@ func (ss *syncSession) timeoutCreateReconcile(appToken, tableID string, fields m
 	}
 	want := ContentHash(fields)
 	for _, rec := range recs {
-		if ContentHash(rec.Fields) == want {
+		if ContentHash(normalize(rec.Fields)) == want {
 			return rec.RecordID
 		}
 	}
 	return ""
+}
+
+// flattenFields 对 fields 逐值 flattenRichText 后浅拷贝：无 fromFields 反向适配器的表
+// （成员单向镜像）的超时核对归一化，使 text 列读回的富文本数组与 push 的裸值同构。
+func flattenFields(f map[string]any) map[string]any {
+	out := make(map[string]any, len(f))
+	for k, v := range f {
+		out[k] = flattenRichText(v)
+	}
+	return out
 }
 
 // —— push ————————————————————————————————————————————————————————————————
@@ -347,7 +360,15 @@ func (ss *syncSession) pushVersions() error {
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, fields)
 			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：服务端可能已写入，按内容核对一次
-				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, fields); found != "" {
+				prog, progErr := ss.s.VersionProgress(ss.p.ID, v.ID)
+				if progErr != nil {
+					prog = store.VersionProgress{}
+				}
+				normalize := func(f map[string]any) map[string]any { // 与 pull 回声同一条往返
+					changed, _, _ := FieldsToVersion(f, v)
+					return VersionToFields(changed, prog)
+				}
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, ss.p.FeishuVersionTableID, fields, normalize); found != "" {
 					ss.warn("推送版本 %s 超时，经内容核对复用远端记录 %s（未重复建行）", v.Name, found)
 					recID = found
 				}
@@ -391,8 +412,8 @@ func (ss *syncSession) pushMembers(membersTableID string) error {
 		recID := m.BitableRecordID
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, membersTableID, fields)
-			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：同 pushTasks
-				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, membersTableID, fields); found != "" {
+			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：同 pushTasks（成员无反向适配器，逐值 flattenRichText）
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, membersTableID, fields, flattenFields); found != "" {
 					ss.warn("推送成员 %s 超时，经内容核对复用远端记录 %s（未重复建行）", m.Name, found)
 					recID = found
 				}
@@ -445,7 +466,11 @@ func (ss *syncSession) pushTasks() error {
 		if recID == "" {
 			recID, err = ss.api.RecordCreate(ss.ctx, ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, fields)
 			if err != nil && isTimeoutErr(err) { // 超时防重复（REAL-2）：服务端可能已写入，按内容核对一次
-				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, fields); found != "" {
+				normalize := func(f map[string]any) map[string]any { // 与 pull 回声同一条往返（本行为底值）
+					changed, _, _ := FieldsToTask(f, t, ss.nameToID, ss.verNameToID)
+					return TaskToFields(changed, ss.idToName, ss.verIDToName)
+				}
+				if found := ss.timeoutCreateReconcile(ss.p.FeishuBitableAppToken, ss.p.FeishuTaskTableID, fields, normalize); found != "" {
 					ss.warn("推送任务 %d 超时，经内容核对复用远端记录 %s（未重复建行）", t.ID, found)
 					recID = found
 				}

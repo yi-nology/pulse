@@ -767,6 +767,48 @@ func TestSyncCreateTimeoutAdoptsExistingRecord(t *testing.T) {
 	}
 }
 
+// TestSyncCreateTimeoutAdoptsRichTextRecord：真实租户 text 列读回是富文本数组
+// （[{type:"text",text:"..."}]，2026-09-15 实测，见 mapping_richtext_test.go）——
+// reconcile 必须按 push/echo 同一条 fromFields→toFields 往返归一化后再哈希，
+// 否则原始 fields 的哈希恒不等于归一化哈希，核对在真实租户永不命中，
+// 超时重试依然建重复行。
+func TestSyncCreateTimeoutAdoptsRichTextRecord(t *testing.T) {
+	s, p, actor := syncEnv(t)
+	tk := mustCreateTask(t, s, p.ID, actor, "写周报")
+	if _, err := s.GetOrCreateMember("tester", "human"); err != nil {
+		t.Fatal(err)
+	}
+	remote := map[string]any{
+		"任务名": []any{map[string]any{"type": "text", "text": "写周报"}}, // 富文本形态（非裸字符串）
+		"状态":  "todo", "负责人": "tester", "优先级": "3",
+		"预估人日": float64(2), "已废弃": false,
+	}
+	fake := &fakeAPI{
+		createErrOnce: fmt.Errorf("创建记录失败: %w", context.DeadlineExceeded), // 超时但服务端已写入
+		searchByTable: searchScript("tblTask", taskRecord("recX", 3000, remote)),
+	}
+
+	res, err := SyncProject(context.Background(), clientWith(fake), s, p, actor)
+	if err != nil {
+		t.Fatalf("SyncProject: %v", err)
+	}
+	// 富文本读回仍被归一化命中：record_id 采纳并正常回填
+	tk = wantTaskSynced(t, s, tk.ID, "recX")
+	if len(tk.BitableSyncedHash) != 16 {
+		t.Fatalf("synced_hash 未落库: %q", tk.BitableSyncedHash)
+	}
+	if len(fake.createdFields) != 0 {
+		t.Fatalf("超时后不得重复建行: created=%+v", fake.createdFields)
+	}
+	if res.Pushed != 1 {
+		t.Fatalf("Pushed = %d, want 1（采纳后走正常回填）(%+v)", res.Pushed, res)
+	}
+	// pull 侧同一往返归一化 → 自回声，不插重复行
+	if res.SkippedEcho != 1 || res.Pulled != 0 {
+		t.Fatalf("pull 侧应自回声跳过: %+v", res)
+	}
+}
+
 // TestSyncCreateNonTimeoutNoReconcile：非超时错误维持原失败语义（告警 + dirty 保留），
 // 不触发内容核对（tblTask 只有 pull 的那一次搜表）。
 func TestSyncCreateNonTimeoutNoReconcile(t *testing.T) {
