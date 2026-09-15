@@ -94,3 +94,10 @@
 - 现象：daily 全员日报 63 块一次性 BlockAppend → 真实租户 99992402 field validation failed（63 块逐块单独 POST 全部合法）。
 - 根因：飞书 docx children create 单次请求有块数上限（约 50）。
 - 修复：BlockAppend 按 40 块分批循环追加（api.go），fake/测试语义不变。真实重发验证：142 块全部写入 ✅。
+
+## v1.2 验证补充（需求 UID + 协作文档链接列）
+
+- 真实老库升级：v1.1 旧库直接 migrate 曾报 `no such column: uid`（索引先于列的顺序 bug，f8fadb1 修复，含旧库升级红→绿测试）——修复后老库升级成功、二次 Open 幂等 ✅。
+- 需求表新增 需求UID（32 hex，需求行各自唯一）与 协作文档（docx 超链接）列，均由 sync 写入 ✅。
+- bug 表 需求ID 列内容 = 关联需求的 UID（跨机安全引用）✅；无关联需求的 bug 列为空 ✅。
+- 迁移操作记录：现网 bug表/提测表 需手工/API 补 需求ID 列（新 bind 自动含），补列后 sync 自动重写收敛。
