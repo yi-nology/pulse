@@ -188,7 +188,7 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	}
 	// 任务表字段（日期列=5 日期类型、状态/优先级/版本=3 单选、预估人日=2 数字、已废弃=7）
 	wantFields(t, fake.calls[1].fields, []Field{
-		{Name: "任务名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 1},
+		{Name: "任务名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 3},
 		{Name: "优先级", Type: 3}, {Name: "开始", Type: 5}, {Name: "截止", Type: 5},
 		{Name: "预估人日", Type: 2}, {Name: "版本", Type: 3},
 		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
@@ -214,7 +214,7 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 		}
 	}
 	wantFields(t, fake.calls[4].fields, []Field{
-		{Name: "需求名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 1},
+		{Name: "需求名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 3},
 		{Name: "优先级", Type: 3}, {Name: "描述", Type: 1},
 		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
 	})

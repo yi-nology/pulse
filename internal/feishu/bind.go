@@ -28,13 +28,13 @@ const (
 
 // taskTableFields / versionTableFields 是 bind 建表用的字段定义。
 // 日期列用日期类型（映射层写毫秒时间戳、读回转 YYYY-MM-DD，甘特视图开箱可用）；
-// 状态/优先级/版本类用单选（选项随记录写入自动创建）；负责人保持文本（本地成员含
-// agent，无法映射为飞书用户字段）。
+// 状态/优先级/版本/人员类用单选——人员选项即名单（本地成员含 agent，故不用飞书
+// 用户字段；Bitable 侧手动新增的选项经同步会自动注册为本地成员）。
 func taskTableFields() []Field {
 	return []Field{
 		{Name: "任务名", Type: fieldTypeText},
 		{Name: "状态", Type: fieldTypeSingleSelect},
-		{Name: "负责人", Type: fieldTypeText},
+		{Name: "负责人", Type: fieldTypeSingleSelect},
 		{Name: "优先级", Type: fieldTypeSingleSelect},
 		{Name: "开始", Type: fieldTypeDate},
 		{Name: "截止", Type: fieldTypeDate},
@@ -58,13 +58,14 @@ func versionTableFields() []Field {
 // updated_by（与任务表约定一致——updated_by 由 pulse 预留、不参与同步）。列名与
 // mapping_v11.go 的映射一一对应。
 // v11FieldType 按列名给出原生类型：日期列（评审/会议时间、发布时间）用日期、
-// 枚举列（状态/结论/类型/严重级/版本引用）用单选（选项随记录写入自动创建）、
-// 其余文本。
+// 枚举列（状态/结论/类型/严重级/版本引用）与人员列用单选（人员选项即名单，
+// 随指派自动创建；Bitable 侧手动新增的选项经同步会自动注册为本地成员）、其余文本。
 func v11FieldType(column string) int {
 	switch column {
 	case "评审时间", "时间", "发布时间":
 		return fieldTypeDate
-	case "状态", "结论", "评审类型", "严重级", "优先级", "版本", "发现版本":
+	case "状态", "结论", "评审类型", "严重级", "优先级", "版本", "发现版本",
+		"负责人", "提测人", "测试负责人", "发布负责人":
 		return fieldTypeSingleSelect
 	default:
 		return fieldTypeText

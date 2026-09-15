@@ -192,7 +192,7 @@ pulse report weekly --project demo                    # 周报 Markdown
 - **记录文档内容不回流**：需求/评审/会议/提测单/发版的协作文档由 pulse 按模板**只建一次**，之后的正文编辑（结论、纪要、清单勾选）都在飞书文档中多人协作完成，pulse 不更新也不解析这些内容。实体的结构化状态流转只经 CLI/MCP 显式操作（如 `pulse review conclude`、`pulse bug update`）。
 - **MCP 写不自动建记录文档**：经 MCP 工具（`create_requirement` 等）创建的记录不会自动建协作文档；CLI 创建命令默认自动建（`--no-doc` 跳过）。需要为 MCP 建的需求补建文档时执行 `pulse requirement doc <id>`（get-or-create，已建过则直接显示 token）。
 - **评审 conclude / 会议登记目前仅 CLI**：MCP 侧评审只能 `create_review`（记一次评审，结论 pending）与 `list_reviews` 只读查看，给出结论的 `review conclude` 和会议登记 `meeting record` 暂无对应 MCP 工具，需在 CLI 执行。
-- **旧 base 的日期列升级**：v1.1.1 起 bind 创建的开始/截止/目标日期等为原生日期列、状态等为单选列，甘特视图开箱可用；此前创建的旧 base 仍是文本列，需删除旧表重新 `pulse feishu bind`（或手动在 Bitable 改列类型）。
+- **旧 base 的列类型升级**：v1.1.1 起 bind 创建日期列为原生日期类型（甘特开箱可用）、状态/优先级/版本/人员等为单选（选项随指派自动创建，Bitable 侧手动新增选项经同步会自动注册为本地成员）。**注意：对已有数据的列做 text→单选的就地类型转换会丢值**（API 行为）——旧 base 请删表重新 bind，或清空本地 `bitable_synced_hash` 后 sync 全量重写。
 - **Bitable 状态列不校验**：pulse 不校验飞书侧填入的状态词。在 Bitable 中把状态改成非法值后，该记录无法映射回本地状态，`pulse sync` 会告警并跳过这条记录（水位被压住、每轮重试），直到在飞书侧修正为止。
 - **双机同时改同一条记录为整条 last-writer-wins**：没有字段级合并，后写入的一方覆盖整条记录。autopush 默认写完即推，被覆盖的一方通常无感知；`pulse sync` 的输出会对"本地近期修改被飞书侧覆盖"补一条警告；双方均有本地未同步改动时才另落 `sync_conflict` 活动备查。
 - **双机共享 base 时六实体表 id 随 bind 旗标传递**：`feishu bind` 创建模式的"其他机器共享提示"会打印带全六实体表 id 的完整命令（`--requirements-table/--reviews-table/--meetings-table/--bugs-table/--submissions-table/--releases-table`），机器 B 整行复制到采用模式执行即可让六实体参与同步；未传的表保留本机既有值，六实体未配置时自动跳过、只同步任务与版本（不报错）。
