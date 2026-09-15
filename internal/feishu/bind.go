@@ -19,25 +19,27 @@ func SetWarnWriter(w io.Writer) { warnWriter = w }
 
 // 飞书多维表格字段类型编号（api.go Field.Type）。
 const (
-	fieldTypeText     = 1 // 文本
-	fieldTypeNumber   = 2 // 数字
-	fieldTypeCheckbox = 7 // 复选框
+	fieldTypeText        = 1 // 文本
+	fieldTypeNumber      = 2 // 数字
+	fieldTypeSingleSelect = 3 // 单选
+	fieldTypeDate        = 5 // 日期
+	fieldTypeCheckbox    = 7 // 复选框
 )
 
 // taskTableFields / versionTableFields 是 bind 建表用的字段定义。
-// 计划决策：日期与单选一律用 text 字段落 Bitable——避免日期/单选类型在 API 写入时的格式
-// 约束，换取 TaskToFields/FieldsToTask 映射零歧义；甘特视图对文本日期列不可用时，用户在
-// Bitable 里把「开始/截止」列改为日期类型即可（一次性手动操作，bind 输出里提示）。
+// 日期列用日期类型（映射层写毫秒时间戳、读回转 YYYY-MM-DD，甘特视图开箱可用）；
+// 状态/优先级/版本类用单选（选项随记录写入自动创建）；负责人保持文本（本地成员含
+// agent，无法映射为飞书用户字段）。
 func taskTableFields() []Field {
 	return []Field{
 		{Name: "任务名", Type: fieldTypeText},
-		{Name: "状态", Type: fieldTypeText},
+		{Name: "状态", Type: fieldTypeSingleSelect},
 		{Name: "负责人", Type: fieldTypeText},
-		{Name: "优先级", Type: fieldTypeText},
-		{Name: "开始", Type: fieldTypeText},
-		{Name: "截止", Type: fieldTypeText},
+		{Name: "优先级", Type: fieldTypeSingleSelect},
+		{Name: "开始", Type: fieldTypeDate},
+		{Name: "截止", Type: fieldTypeDate},
 		{Name: "预估人日", Type: fieldTypeNumber},
-		{Name: "版本", Type: fieldTypeText},
+		{Name: "版本", Type: fieldTypeSingleSelect},
 		{Name: "已废弃", Type: fieldTypeCheckbox},
 		{Name: "updated_by", Type: fieldTypeText},
 	}
@@ -46,8 +48,8 @@ func taskTableFields() []Field {
 func versionTableFields() []Field {
 	return []Field{
 		{Name: "版本名", Type: fieldTypeText},
-		{Name: "目标日期", Type: fieldTypeText},
-		{Name: "状态", Type: fieldTypeText},
+		{Name: "目标日期", Type: fieldTypeDate},
+		{Name: "状态", Type: fieldTypeSingleSelect},
 		{Name: "备注", Type: fieldTypeText},
 	}
 }
@@ -55,10 +57,24 @@ func versionTableFields() []Field {
 // v11TableFields 是 v1.1 六实体的建表字段定义：全部 text 列 + 已废弃 checkbox +
 // updated_by（与任务表约定一致——updated_by 由 pulse 预留、不参与同步）。列名与
 // mapping_v11.go 的映射一一对应。
+// v11FieldType 按列名给出原生类型：日期列（评审/会议时间、发布时间）用日期、
+// 枚举列（状态/结论/类型/严重级/版本引用）用单选（选项随记录写入自动创建）、
+// 其余文本。
+func v11FieldType(column string) int {
+	switch column {
+	case "评审时间", "时间", "发布时间":
+		return fieldTypeDate
+	case "状态", "结论", "评审类型", "严重级", "优先级", "版本", "发现版本":
+		return fieldTypeSingleSelect
+	default:
+		return fieldTypeText
+	}
+}
+
 func v11TableFields(columns []string) []Field {
 	fields := make([]Field, 0, len(columns)+2)
 	for _, c := range columns {
-		fields = append(fields, Field{Name: c, Type: fieldTypeText})
+		fields = append(fields, Field{Name: c, Type: v11FieldType(c)})
 	}
 	fields = append(fields,
 		Field{Name: "已废弃", Type: fieldTypeCheckbox},

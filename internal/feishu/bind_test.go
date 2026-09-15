@@ -186,11 +186,11 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	if fake.calls[0].args[0] != "演示项目" {
 		t.Fatalf("base 名 = %q, want 项目名", fake.calls[0].args[0])
 	}
-	// 任务表字段（brief §6 映射：日期/单选一律 text，预估人日 number，已废弃 checkbox）
+	// 任务表字段（日期列=5 日期类型、状态/优先级/版本=3 单选、预估人日=2 数字、已废弃=7）
 	wantFields(t, fake.calls[1].fields, []Field{
-		{Name: "任务名", Type: 1}, {Name: "状态", Type: 1}, {Name: "负责人", Type: 1},
-		{Name: "优先级", Type: 1}, {Name: "开始", Type: 1}, {Name: "截止", Type: 1},
-		{Name: "预估人日", Type: 2}, {Name: "版本", Type: 1},
+		{Name: "任务名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 1},
+		{Name: "优先级", Type: 3}, {Name: "开始", Type: 5}, {Name: "截止", Type: 5},
+		{Name: "预估人日", Type: 2}, {Name: "版本", Type: 3},
 		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
 	})
 	if fake.calls[1].args[0] != "appT" || fake.calls[1].args[1] != "任务表" {
@@ -198,14 +198,14 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	}
 	// 版本表字段
 	wantFields(t, fake.calls[2].fields, []Field{
-		{Name: "版本名", Type: 1}, {Name: "目标日期", Type: 1},
-		{Name: "状态", Type: 1}, {Name: "备注", Type: 1},
+		{Name: "版本名", Type: 1}, {Name: "目标日期", Type: 5},
+		{Name: "状态", Type: 3}, {Name: "备注", Type: 1},
 	})
 	// 甘特视图建在任务表上
 	if got := fake.calls[3].args; got[0] != "appT" || got[1] != "tblTask" || got[2] != "甘特" || got[3] != "gantt" {
 		t.Fatalf("ViewCreate 参数 = %+v, want appT/tblTask/甘特/gantt", got)
 	}
-	// 六实体表：表名按序、需求表字段精确（全 text + 已废弃 checkbox + updated_by）
+	// 六实体表：表名按序、需求表字段精确（状态/优先级单选 + 已废弃 checkbox + updated_by）
 	wantNames := []string{"需求表", "评审表", "会议表", "bug表", "提测表", "发版表"}
 	for i, name := range wantNames {
 		call := fake.calls[4+i]
@@ -214,8 +214,8 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 		}
 	}
 	wantFields(t, fake.calls[4].fields, []Field{
-		{Name: "需求名", Type: 1}, {Name: "状态", Type: 1}, {Name: "负责人", Type: 1},
-		{Name: "优先级", Type: 1}, {Name: "描述", Type: 1},
+		{Name: "需求名", Type: 1}, {Name: "状态", Type: 3}, {Name: "负责人", Type: 1},
+		{Name: "优先级", Type: 3}, {Name: "描述", Type: 1},
 		{Name: "已废弃", Type: 7}, {Name: "updated_by", Type: 1},
 	})
 	// 文档建在根目录，标题含项目名

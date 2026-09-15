@@ -85,13 +85,16 @@ func ReviewToFields(v model.Review) map[string]any {
 	if v.RequirementID > 0 {
 		reqRef = strconv.FormatInt(v.RequirementID, 10)
 	}
-	return map[string]any{
+	fields := map[string]any{
 		"评审类型": v.Kind,
 		"结论":   v.Conclusion,
-		"评审时间": v.HeldAt,
 		"需求ID": reqRef,
 		"已废弃":  v.Archived,
 	}
+	if c := dateToCell(v.HeldAt); c != nil {
+		fields["评审时间"] = c
+	}
+	return fields
 }
 
 var reviewRequiredFields = []string{"评审类型", "结论"}
@@ -114,7 +117,7 @@ func FieldsToReview(f map[string]any, local model.Review) (changed model.Review,
 	}
 	changed.Kind = adoptImmutable(local.Kind, toText(f["评审类型"]), "评审类型", &warnings)
 	changed.Conclusion = toText(f["结论"])
-	changed.HeldAt = adoptImmutable(local.HeldAt, toText(f["评审时间"]), "评审时间", &warnings)
+	changed.HeldAt = adoptImmutable(local.HeldAt, cellToDate(f["评审时间"]), "评审时间", &warnings)
 	if v, ok := f["需求ID"]; ok {
 		text := toText(v)
 		if text == "" {
@@ -137,11 +140,14 @@ func FieldsToReview(f map[string]any, local model.Review) (changed model.Review,
 
 // MeetingToFields 把本地会议映射为 Bitable 字段。
 func MeetingToFields(m model.Meeting) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"会议标题": m.Title,
-		"时间":   m.HeldAt,
 		"已废弃":  m.Archived,
 	}
+	if c := dateToCell(m.HeldAt); c != nil {
+		fields["时间"] = c
+	}
+	return fields
 }
 
 var meetingRequiredFields = []string{"会议标题"}
@@ -162,7 +168,7 @@ func FieldsToMeeting(f map[string]any, local model.Meeting) (changed model.Meeti
 	}
 	changed.Title = adoptImmutable(local.Title, toText(f["会议标题"]), "会议标题", &warnings)
 	if v, ok := f["时间"]; ok {
-		changed.HeldAt = adoptImmutable(local.HeldAt, toText(v), "时间", &warnings)
+		changed.HeldAt = adoptImmutable(local.HeldAt, cellToDate(v), "时间", &warnings)
 	}
 	warnings = append(warnings, unknownFieldWarnings(f, meetingFieldSet)...)
 	return changed, nil, warnings
@@ -289,14 +295,17 @@ func FieldsToSubmission(f map[string]any, local model.TestSubmission, memberIDBy
 
 // ReleaseToFields 把本地发版记录映射为 Bitable 字段。
 func ReleaseToFields(r model.Release, memberNameByID, versionNameByID map[int64]string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"版本":    versionNameByID[r.VersionID],
 		"状态":    r.Status,
 		"发布负责人": memberNameByID[r.ReleaseManagerID],
-		"发布时间":  r.ReleasedAt,
 		"备注":    r.Notes,
 		"已废弃":   r.Archived,
 	}
+	if c := dateToCell(r.ReleasedAt); c != nil {
+		fields["发布时间"] = c
+	}
+	return fields
 }
 
 var releaseRequiredFields = []string{"版本", "状态"}
@@ -330,7 +339,7 @@ func FieldsToRelease(f map[string]any, local model.Release, memberIDByName, vers
 	}
 	changed.ReleaseManagerID = resolveMemberFromField(f, "发布负责人", local.ReleaseManagerID, memberIDByName, &warnings)
 	if v, ok := f["发布时间"]; ok {
-		changed.ReleasedAt = adoptImmutable(local.ReleasedAt, toText(v), "发布时间", &warnings)
+		changed.ReleasedAt = adoptImmutable(local.ReleasedAt, cellToDate(v), "发布时间", &warnings)
 	}
 	if v, ok := f["备注"]; ok {
 		changed.Notes = toText(v)

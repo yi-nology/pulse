@@ -143,8 +143,6 @@ func newFeishuBindCmd() *cobra.Command {
 				p.Key, p.FeishuBitableAppToken, p.FeishuTaskTableID, p.FeishuVersionTableID, p.FeishuDocToken,
 				tables.Requirements, tables.Reviews, tables.Meetings,
 				tables.Bugs, tables.TestSubmissions, tables.Releases)
-			fmt.Fprintln(out, "日期列提示: 开始/截止 目前是文本列，甘特视图需日期类型；"+
-				"可在 Bitable 中将这两列改为日期类型（一次性手动操作）")
 			return nil
 		},
 	}

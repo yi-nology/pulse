@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zhangyi/pulse/internal/model"
 )
@@ -35,18 +36,24 @@ func ContentHash(fields map[string]any) string {
 
 // TaskToFields 把本地任务映射为 Bitable 字段（与 bind 建表列对应；updated_by 列
 // v1.0 不参与同步，不计入指纹）。memberNameByID/versionNameByID 缺项时对应列落空串。
+// 日期列为日期类型：写毫秒时间戳，空日期省略键。
 func TaskToFields(t model.Task, memberNameByID map[int64]string, versionNameByID map[int64]string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"任务名":  t.Title,
 		"状态":   t.Status,
 		"负责人":  memberNameByID[t.AssigneeID],
 		"优先级":  strconv.Itoa(t.Priority),
-		"开始":   t.StartDate,
-		"截止":   t.DueDate,
 		"预估人日": t.EstimateDays,
 		"版本":   versionNameByID[t.VersionID],
 		"已废弃":  t.Archived,
 	}
+	if c := dateToCell(t.StartDate); c != nil {
+		fields["开始"] = c
+	}
+	if c := dateToCell(t.DueDate); c != nil {
+		fields["截止"] = c
+	}
+	return fields
 }
 
 // taskRequiredFields 是 pull 侧缺一即跳过整条记录的必填列（其余列可被清空为缺省，
@@ -91,10 +98,10 @@ func FieldsToTask(f map[string]any, local model.Task, memberIDByName map[string]
 		}
 	}
 	if v, ok := f["开始"]; ok {
-		changed.StartDate = toText(v)
+		changed.StartDate = cellToDate(v)
 	}
 	if v, ok := f["截止"]; ok {
-		changed.DueDate = toText(v)
+		changed.DueDate = cellToDate(v)
 	}
 	if v, ok := f["预估人日"]; ok {
 		changed.EstimateDays = toFloat(v)
@@ -125,12 +132,15 @@ var taskFieldSet = map[string]bool{
 
 // VersionToFields 把本地版本映射为 Bitable 字段（版本表无已废弃列：版本无软删语义）。
 func VersionToFields(v model.Version) map[string]any {
-	return map[string]any{
-		"版本名":  v.Name,
-		"目标日期": v.TargetDate,
-		"状态":   v.Status,
-		"备注":   v.Notes,
+	fields := map[string]any{
+		"版本名": v.Name,
+		"状态":  v.Status,
+		"备注":  v.Notes,
 	}
+	if c := dateToCell(v.TargetDate); c != nil {
+		fields["目标日期"] = c
+	}
+	return fields
 }
 
 // versionRequiredFields 是 pull 侧版本记录的必填列。
@@ -150,7 +160,7 @@ func FieldsToVersion(f map[string]any, local model.Version) (changed model.Versi
 	}
 	changed.Name = toText(f["版本名"])
 	if v, ok := f["目标日期"]; ok {
-		changed.TargetDate = toText(v)
+		changed.TargetDate = cellToDate(v)
 	}
 	if v, ok := f["状态"]; ok {
 		changed.Status = toText(v)
@@ -194,6 +204,39 @@ func flattenRichText(v any) any {
 		}
 	}
 	return b.String()
+}
+
+// layoutDate 是本地日期文本的统一格式。
+const layoutDate = "2006-01-02"
+
+// dateToCell 把本地日期文本（YYYY-MM-DD，容忍带时间的完整时间戳，取日期部分）转为
+// Bitable 日期列的毫秒时间戳；空串/解析失败返回 nil（调用方省略该键）。
+func dateToCell(s string) any {
+	if s == "" {
+		return nil
+	}
+	day := s
+	if len(day) > len(layoutDate) {
+		day = day[:len(layoutDate)]
+	}
+	t, err := time.Parse(layoutDate, day)
+	if err != nil {
+		return nil
+	}
+	return float64(t.UnixMilli())
+}
+
+// cellToDate 把 Bitable 日期列读回的毫秒时间戳（float64）转 YYYY-MM-DD（UTC）；
+// 兼容遗留字符串形态；空/无法解析返回 ""。
+func cellToDate(v any) string {
+	switch x := flattenRichText(v).(type) {
+	case float64:
+		return time.UnixMilli(int64(x)).UTC().Format(layoutDate)
+	case string:
+		return x
+	default:
+		return ""
+	}
 }
 
 // toText 把远端标量转为文本：string 原样；数字/布尔按 JSON 形态；富文本数组先展平；其余 fmt 兜底。

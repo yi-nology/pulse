@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhangyi/pulse/internal/model"
 )
@@ -70,13 +71,17 @@ func TestReviewFieldsRoundTripAndImmutableSemantics(t *testing.T) {
 	v := model.Review{Kind: "requirement", HeldAt: "2026-09-15 10:00:00",
 		Conclusion: "passed_with_notes", RequirementID: 7}
 	fields := ReviewToFields(v)
+	wantDate := float64(time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC).UnixMilli())
 	if fields["评审类型"] != "requirement" || fields["结论"] != "passed_with_notes" ||
-		fields["评审时间"] != "2026-09-15 10:00:00" || fields["需求ID"] != "7" {
-		t.Fatalf("评审字段不符: %+v", fields)
+		fields["评审时间"] != wantDate || fields["需求ID"] != "7" {
+		t.Fatalf("评审字段不符: %+v (want 评审时间=%v)", fields, wantDate)
 	}
 	got, missing, warns := FieldsToReview(fields, model.Review{})
 	if len(missing) != 0 || len(warns) != 0 {
 		t.Fatalf("完整字段不应有缺失/告警: %v %v", missing, warns)
+	}
+	if got.HeldAt != "2026-09-15" { // 日期列只保留日期部分
+		t.Fatalf("HeldAt 应为日期形态: %q", got.HeldAt)
 	}
 	fields2 := ReviewToFields(got)
 	if !reflect.DeepEqual(fields, fields2) {
@@ -107,12 +112,16 @@ func TestReviewFieldsRoundTripAndImmutableSemantics(t *testing.T) {
 func TestMeetingFieldsRoundTrip(t *testing.T) {
 	m := model.Meeting{Title: "迭代评审会", HeldAt: "2026-09-15 09:00:00"}
 	fields := MeetingToFields(m)
-	if fields["会议标题"] != "迭代评审会" || fields["时间"] != "2026-09-15 09:00:00" || fields["已废弃"] != false {
-		t.Fatalf("会议字段不符: %+v", fields)
+	wantDate := float64(time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC).UnixMilli())
+	if fields["会议标题"] != "迭代评审会" || fields["时间"] != wantDate || fields["已废弃"] != false {
+		t.Fatalf("会议字段不符: %+v (want 时间=%v)", fields, wantDate)
 	}
 	got, missing, warns := FieldsToMeeting(fields, model.Meeting{})
 	if len(missing) != 0 || len(warns) != 0 {
 		t.Fatalf("完整字段不应有缺失/告警: %v %v", missing, warns)
+	}
+	if got.HeldAt != "2026-09-15" {
+		t.Fatalf("HeldAt 应为日期形态: %q", got.HeldAt)
 	}
 	if !reflect.DeepEqual(fields, MeetingToFields(got)) {
 		t.Fatalf("往返不一致: %+v vs %+v", MeetingToFields(got), fields)
@@ -213,13 +222,17 @@ func TestReleaseFieldsRoundTripAndResolution(t *testing.T) {
 	rel := model.Release{VersionID: 5, Status: "released", ReleaseManagerID: 3,
 		ReleasedAt: "2026-09-15 12:00:00", Notes: "灰度 10%"}
 	fields := ReleaseToFields(rel, idToName, verIDToName)
+	wantDate := float64(time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC).UnixMilli())
 	if fields["版本"] != "v1.0" || fields["状态"] != "released" || fields["发布负责人"] != "tester" ||
-		fields["发布时间"] != "2026-09-15 12:00:00" || fields["备注"] != "灰度 10%" {
-		t.Fatalf("发版字段不符: %+v", fields)
+		fields["发布时间"] != wantDate || fields["备注"] != "灰度 10%" {
+		t.Fatalf("发版字段不符: %+v (want 发布时间=%v)", fields, wantDate)
 	}
 	got, missing, warns := FieldsToRelease(fields, model.Release{}, nameToID, verNameToID)
 	if len(missing) != 0 || len(warns) != 0 {
 		t.Fatalf("完整字段不应有缺失/告警: %v %v", missing, warns)
+	}
+	if got.ReleasedAt != "2026-09-15" { // 日期列只保留日期部分
+		t.Fatalf("ReleasedAt 应为日期形态: %q", got.ReleasedAt)
 	}
 	if !reflect.DeepEqual(fields, ReleaseToFields(got, idToName, verIDToName)) {
 		t.Fatalf("往返不一致: %+v", ReleaseToFields(got, idToName, verIDToName))

@@ -407,8 +407,9 @@ func TestSyncVersionPushAndPull(t *testing.T) {
 		t.Fatalf("版本应被推送: %+v fields=%+v", res, fake.createdFields)
 	}
 	f := fake.createdFields[0]
-	if f["版本名"] != "v1.0" || f["目标日期"] != "2026-10-01" || f["状态"] != "planned" || f["备注"] != "" {
-		t.Fatalf("版本字段不符: %+v", f)
+	wantTarget := float64(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
+	if f["版本名"] != "v1.0" || f["目标日期"] != wantTarget || f["状态"] != "planned" || f["备注"] != "" {
+		t.Fatalf("版本字段不符: %+v (want 目标日期=%v)", f, wantTarget)
 	}
 	// 远端新版本 → 本地创建
 	fake.searchByTable = searchScript("tblVer", taskRecord("recV2", 5000, map[string]any{
