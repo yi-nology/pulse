@@ -48,6 +48,20 @@ func (s *Store) LogActivity(a model.Activity) error {
 	return insertActivity(s.db, a)
 }
 
+// entityActivity 组装一条通用实体的活动记录，供 v1.1 六实体（requirement/review/
+// meeting/bug/test_submission/release）复用；entityType 即 activity.entity_type。
+func entityActivity(entityType string, projectID, entityID int64, actor model.Member, behalf *model.Member, action, detail string) model.Activity {
+	var onBehalfOf int64
+	if behalf != nil {
+		onBehalfOf = behalf.ID
+	}
+	return model.Activity{
+		ProjectID: projectID, ActorID: actor.ID, ActorType: actor.Type,
+		OnBehalfOf: onBehalfOf, Action: action, EntityType: entityType,
+		EntityID: entityID, Detail: detail,
+	}
+}
+
 // activitiesLayout 与 schema 默认值 strftime('%Y-%m-%d %H:%M:%S','now') 的 UTC 文本格式一致。
 const activitiesLayout = "2006-01-02 15:04:05"
 

@@ -47,6 +47,108 @@ type Version struct {
 	BitableRecordID, BitableSyncedHash string
 }
 
+// ---- v1.1 研发交付闭环六实体（spec §3.1）----
+
+type Requirement struct {
+	ID                   int64
+	ProjectID            int64
+	Title, Description   string
+	Status               string // proposed | reviewing | accepted | in_dev | delivered | rejected
+	Priority             int
+	OwnerID              int64 // 0 = 无人
+	Source               string
+	FeishuDocToken       string
+	BitableRecordID      string
+	BitableSyncedHash    string
+	SyncedAt             string
+	Archived             bool
+	CreatedAt, UpdatedAt string
+}
+
+type Review struct {
+	ID                   int64
+	ProjectID            int64
+	RequirementID        int64  // 0 = 无关联需求
+	Kind                 string // requirement | release | test
+	HeldAt               string
+	Conclusion           string // pending | passed | passed_with_notes | rejected
+	FeishuDocToken       string
+	CreatedBy            int64
+	BitableRecordID      string
+	BitableSyncedHash    string
+	SyncedAt             string
+	Archived             bool
+	CreatedAt, UpdatedAt string
+}
+
+type Meeting struct {
+	ID                   int64
+	ProjectID            int64
+	Title                string
+	HeldAt               string
+	FeishuDocToken       string
+	CreatedBy            int64
+	BitableRecordID      string
+	BitableSyncedHash    string
+	SyncedAt             string
+	Archived             bool
+	CreatedAt, UpdatedAt string
+}
+
+type Bug struct {
+	ID                   int64
+	ProjectID            int64
+	Title, Description   string
+	Severity             int    // 1..4 = P0..P3
+	Status               string // open | fixing | fixed | verified | closed | wontfix
+	ReporterID           int64
+	AssigneeID           int64 // 0 = 无人
+	RequirementID        int64 // 0 = 无
+	FoundVersionID       int64 // 0 = 无
+	FixTaskID            int64 // 0 = 无
+	FeishuDocToken       string
+	BitableRecordID      string
+	BitableSyncedHash    string
+	SyncedAt             string
+	Archived             bool
+	CreatedAt, UpdatedAt string
+}
+
+type TestSubmission struct {
+	ID                   int64
+	ProjectID            int64
+	VersionID            int64
+	RequirementID        int64 // 0 = 无
+	SubmittedBy          int64
+	TestOwnerID          int64  // 0 = 无人
+	Status               string // draft | submitted | testing | passed | failed
+	Scope                string
+	FeishuDocToken       string
+	SubmittedAt          string // 首次进入 submitted/testing 及之后时补记（draft 为空）
+	ConcludedAt          string // 进入 passed/failed 的时刻
+	BitableRecordID      string
+	BitableSyncedHash    string
+	SyncedAt             string
+	Archived             bool
+	CreatedAt, UpdatedAt string
+}
+
+type Release struct {
+	ID                   int64
+	ProjectID            int64
+	VersionID            int64
+	Status               string // preparing | testing | released | rolled_back
+	ReleaseManagerID     int64
+	ReleasedAt           string // 进入 released 的时刻
+	FeishuDocToken       string
+	Notes                string
+	BitableRecordID      string
+	BitableSyncedHash    string
+	SyncedAt             string
+	Archived             bool
+	CreatedAt, UpdatedAt string
+}
+
 type Dependency struct {
 	ID, TaskID, DependsOnTaskID int64
 	Type                        string

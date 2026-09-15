@@ -85,6 +85,108 @@ CREATE TABLE IF NOT EXISTS activity (
   detail TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
 );
+CREATE TABLE IF NOT EXISTS requirements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','reviewing','accepted','in_dev','delivered','rejected')),
+  priority INTEGER NOT NULL DEFAULT 3,
+  owner_id INTEGER REFERENCES members(id),
+  source TEXT NOT NULL DEFAULT '',
+  feishu_doc_token TEXT NOT NULL DEFAULT '',
+  bitable_record_id TEXT NOT NULL DEFAULT '',
+  bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
+CREATE TABLE IF NOT EXISTS reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  requirement_id INTEGER REFERENCES requirements(id),
+  kind TEXT NOT NULL DEFAULT 'requirement',
+  held_at TEXT NOT NULL DEFAULT '',
+  conclusion TEXT NOT NULL DEFAULT 'pending' CHECK(conclusion IN ('pending','passed','passed_with_notes','rejected')),
+  feishu_doc_token TEXT NOT NULL DEFAULT '',
+  created_by INTEGER NOT NULL REFERENCES members(id),
+  bitable_record_id TEXT NOT NULL DEFAULT '',
+  bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
+CREATE TABLE IF NOT EXISTS meetings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  held_at TEXT NOT NULL DEFAULT '',
+  feishu_doc_token TEXT NOT NULL DEFAULT '',
+  created_by INTEGER NOT NULL REFERENCES members(id),
+  bitable_record_id TEXT NOT NULL DEFAULT '',
+  bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
+CREATE TABLE IF NOT EXISTS bugs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  severity INTEGER NOT NULL DEFAULT 3,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','fixing','fixed','verified','closed','wontfix')),
+  reporter_id INTEGER NOT NULL REFERENCES members(id),
+  assignee_id INTEGER REFERENCES members(id),
+  requirement_id INTEGER REFERENCES requirements(id),
+  found_version_id INTEGER REFERENCES versions(id),
+  fix_task_id INTEGER REFERENCES tasks(id),
+  feishu_doc_token TEXT NOT NULL DEFAULT '',
+  bitable_record_id TEXT NOT NULL DEFAULT '',
+  bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
+CREATE TABLE IF NOT EXISTS test_submissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  version_id INTEGER NOT NULL REFERENCES versions(id),
+  requirement_id INTEGER REFERENCES requirements(id),
+  submitted_by INTEGER NOT NULL REFERENCES members(id),
+  test_owner_id INTEGER REFERENCES members(id),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','submitted','testing','passed','failed')),
+  scope TEXT NOT NULL DEFAULT '',
+  feishu_doc_token TEXT NOT NULL DEFAULT '',
+  submitted_at TEXT NOT NULL DEFAULT '',
+  concluded_at TEXT NOT NULL DEFAULT '',
+  bitable_record_id TEXT NOT NULL DEFAULT '',
+  bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
+CREATE TABLE IF NOT EXISTS releases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  version_id INTEGER NOT NULL REFERENCES versions(id),
+  status TEXT NOT NULL DEFAULT 'preparing' CHECK(status IN ('preparing','testing','released','rolled_back')),
+  release_manager_id INTEGER REFERENCES members(id),
+  released_at TEXT NOT NULL DEFAULT '',
+  feishu_doc_token TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  bitable_record_id TEXT NOT NULL DEFAULT '',
+  bitable_synced_hash TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
 CREATE TABLE IF NOT EXISTS sync_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -119,6 +221,12 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN synced_at TEXT NOT NULL DEFAULT ''`); err != nil &&
 		!strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate add tasks.synced_at: %w", err)
+	}
+	// 既有库升级：为 tasks 补 requirement_id（需求拆解为任务，spec §3.1）。新建库的
+	// schema 已含该列，ALTER 报 duplicate column 属预期，容忍即可。
+	if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN requirement_id INTEGER`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate add tasks.requirement_id: %w", err)
 	}
 	return nil
 }
