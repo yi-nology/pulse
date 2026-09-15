@@ -152,6 +152,54 @@ func TestUpdateTestSubmissionStatusAndTimestamps(t *testing.T) {
 	}
 }
 
+// TestUpdateTestSubmissionConcludedAtStable concluded_at 仅在真实流转进入 passed/failed
+// 时补记一次：对已定论提测单做 scope 或 doc-token 写回（Task 3 通道）等无关更新
+// 不得重置结论时刻；submitted_at 仅填空，天然安全。
+func TestUpdateTestSubmissionConcludedAtStable(t *testing.T) {
+	s := openTest(t)
+	p := seedProject(t, s)
+	actor := taskActor(t, s)
+	vid := seedVersionRow(t, s, p.ID, "v1")
+	sub, err := s.CreateTestSubmission(model.TestSubmission{ProjectID: p.ID, VersionID: vid}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 草稿阶段的 scope-only 更新：不产生任何时间戳
+	got, err := s.UpdateTestSubmission(sub.ID, SubmissionChanges{Scope: strptr("范围")}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SubmittedAt != "" || got.ConcludedAt != "" {
+		t.Fatalf("draft scope-only update must not stamp: %+v", got)
+	}
+
+	// 流转进入 failed：concluded_at 补记一次
+	got, err = s.UpdateTestSubmission(sub.ID, SubmissionChanges{Status: strptr("failed")}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConcludedAt == "" || got.SubmittedAt == "" {
+		t.Fatalf("transition into failed must stamp both timestamps: %+v", got)
+	}
+	// 把时刻拨回 2000 年：now 为秒级精度，同秒内的错误重置无法察觉，先归零再触发
+	if _, err := s.db.Exec(`UPDATE test_submissions SET concluded_at = '2000-01-01 00:00:00' WHERE id = ?`, sub.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// doc-token 写回：concluded_at / submitted_at 均不变
+	got, err = s.UpdateTestSubmission(sub.ID, SubmissionChanges{FeishuDocToken: strptr("doc")}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConcludedAt != "2000-01-01 00:00:00" {
+		t.Fatalf("doc-token write-back must keep concluded_at, got %q", got.ConcludedAt)
+	}
+	if got.SubmittedAt == "" {
+		t.Fatal("submitted_at must remain stamped")
+	}
+}
+
 func TestListTestSubmissionsFilterVersion(t *testing.T) {
 	s := openTest(t)
 	p := seedProject(t, s)

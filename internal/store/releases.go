@@ -156,8 +156,9 @@ func (s *Store) UpdateRelease(id int64, ch ReleaseChanges, actor model.Member, b
 		change("feishu_doc_token", "update", old.FeishuDocToken, *ch.FeishuDocToken)
 	}
 
-	// 进入 released 的派生时间戳，与状态同点写入
-	if len(sets) > 0 && newStatus == "released" && old.ReleasedAt != now {
+	// 仅真实流转进入 released 补记 released_at（与状态同点写入）；已 released 的
+	// notes/doc-token 写回等无关字段更新不得重置该时刻
+	if old.Status != newStatus && newStatus == "released" {
 		sets = append(sets, "released_at = ?")
 		args = append(args, now)
 	}

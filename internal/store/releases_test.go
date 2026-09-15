@@ -126,6 +126,49 @@ func TestUpdateReleaseStatusAndTimestamps(t *testing.T) {
 	}
 }
 
+// TestUpdateReleaseUnrelatedFieldsKeepReleasedAt released_at 仅在真实流转进入 released
+// 时补记：已 released 的发版单做 notes 或 doc-token 写回（Task 3 通道）等无关字段
+// 更新时，该时刻不得被重置。
+func TestUpdateReleaseUnrelatedFieldsKeepReleasedAt(t *testing.T) {
+	s := openTest(t)
+	p := seedProject(t, s)
+	actor := taskActor(t, s)
+	vid := seedVersionRow(t, s, p.ID, "v1")
+	rel, err := s.CreateRelease(model.Release{ProjectID: p.ID, VersionID: vid}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err = s.UpdateRelease(rel.ID, ReleaseChanges{Status: strptr("released")}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.ReleasedAt == "" {
+		t.Fatal("transition into released must stamp released_at")
+	}
+	// 把时刻拨回 2000 年：now 为秒级精度，同秒内的错误重置无法察觉，先归零再触发
+	if _, err := s.db.Exec(`UPDATE releases SET released_at = '2000-01-01 00:00:00' WHERE id = ?`, rel.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// notes-only 更新：released_at 不变
+	got, err := s.UpdateRelease(rel.ID, ReleaseChanges{Notes: strptr("补记")}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReleasedAt != "2000-01-01 00:00:00" {
+		t.Fatalf("notes-only update must keep released_at, got %q", got.ReleasedAt)
+	}
+	// doc-token 写回：released_at 不变
+	got, err = s.UpdateRelease(rel.ID, ReleaseChanges{FeishuDocToken: strptr("doc")}, actor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReleasedAt != "2000-01-01 00:00:00" {
+		t.Fatalf("doc-token write-back must keep released_at, got %q", got.ReleasedAt)
+	}
+}
+
 func TestListReleases(t *testing.T) {
 	s := openTest(t)
 	p := seedProject(t, s)

@@ -44,16 +44,19 @@ func scanSubmission(scan func(dest ...any) error) (model.TestSubmission, error) 
 	return t, nil
 }
 
-// stampSubmissionTimestamps 依目标状态推导应补记的时间点：
-//   - 离开 draft（submitted/testing/passed/failed）→ submitted_at（已有则保留）；
-//   - 进入 passed/failed → concluded_at。
-//     返回需要写入的两列值（与旧行值合并后的最终结果）。
-func stampSubmissionTimestamps(old model.TestSubmission, status, now string) (submittedAt, concludedAt string) {
-	submittedAt, concludedAt = old.SubmittedAt, old.ConcludedAt
-	if status != "draft" && submittedAt == "" {
+// stampSubmissionTimestamps 依旧/新状态推导应补记的时间点（返回与旧行值合并后的
+// 两列最终值）：
+//   - 离开 draft（submitted/testing/passed/failed）→ submitted_at；仅填空（已有则
+//     保留），对已提交单的无关字段更新天然无副作用；
+//   - 真实流转（oldStatus != newStatus）进入 passed/failed → concluded_at。若不看
+//     流转只看目标状态，对已定论提测单做 scope/owner/doc-token 等更新会静默重置
+//     结论时刻。
+func stampSubmissionTimestamps(oldStatus, newStatus, oldSubmittedAt, oldConcludedAt, now string) (submittedAt, concludedAt string) {
+	submittedAt, concludedAt = oldSubmittedAt, oldConcludedAt
+	if newStatus != "draft" && submittedAt == "" {
 		submittedAt = now
 	}
-	if status == "passed" || status == "failed" {
+	if oldStatus != newStatus && (newStatus == "passed" || newStatus == "failed") {
 		concludedAt = now
 	}
 	return submittedAt, concludedAt
@@ -140,8 +143,9 @@ func (s *Store) ListTestSubmissions(projectID int64, versionID int64) ([]model.T
 }
 
 // UpdateTestSubmission 在单个事务内完成提测单更新（与 UpdateTask 同构）：
-//   - status 变更记 action="update_status"；进入 submitted/testing 补记 submitted_at
-//     （已有则保留），进入 passed/failed 补记 concluded_at——时间戳为派生值，不单独落活动；
+//   - status 变更记 action="update_status"；真实流转离开 draft 补记 submitted_at
+//     （仅填空），真实流转进入 passed/failed 补记 concluded_at——时间戳为派生值，
+//     不单独落活动，且无关字段更新不重置它们；
 //   - scope/test_owner/feishu_doc_token 变更记 action="update"；
 //   - 任何变更刷新 updated_at；无变更（含同值写入）为 no-op，不刷新、不落活动。
 func (s *Store) UpdateTestSubmission(id int64, ch SubmissionChanges, actor model.Member, behalf *model.Member) (model.TestSubmission, error) {
@@ -192,9 +196,10 @@ func (s *Store) UpdateTestSubmission(id int64, ch SubmissionChanges, actor model
 		change("feishu_doc_token", "update", old.FeishuDocToken, *ch.FeishuDocToken)
 	}
 
-	// 状态流转的派生时间戳（submitted_at/concluded_at），与状态同点写入
+	// 状态流转的派生时间戳（submitted_at/concluded_at），与状态同点写入；
+	// concluded_at 仅在真实流转进入 passed/failed 时补记
 	if len(sets) > 0 {
-		submittedAt, concludedAt := stampSubmissionTimestamps(old, newStatus, now)
+		submittedAt, concludedAt := stampSubmissionTimestamps(old.Status, newStatus, old.SubmittedAt, old.ConcludedAt, now)
 		if submittedAt != old.SubmittedAt {
 			sets = append(sets, "submitted_at = ?")
 			args = append(args, submittedAt)
