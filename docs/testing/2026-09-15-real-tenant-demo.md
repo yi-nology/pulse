@@ -44,3 +44,21 @@
 2. 在 Bitable 里随手改一条任务状态 → 回终端 `pulse sync --project demo` → 看本地被拉平
 3. 用 ZCode/CC 挂 MCP（README `.mcp.json` 示例，`PULSE_ACTOR=claude`）让 agent 建任务/修 bug → `pulse sync` → 表格里出现
 4. `/tmp/demo-p2` 是模拟的同事机器，可继续双机实验（删掉即清理）
+
+## 复核补充（用户反馈"飞书那边没弄好"后，2026-09-15）
+
+**用户在真实 UI 看到的三个问题与根因：**
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| 甘特视图是空的 | 首版 bind 用**文本列**存日期（计划中的妥协决策），甘特视图需要日期类型列才能渲染条形 | **方案推翻**：bind 改建原生列——开始/截止/目标日期/评审/会议/发布时间=日期类型（写毫秒时间戳、读回转 YYYY-MM-DD），状态/优先级/版本/结论/严重级等=单选（选项自动创建），预估人日=数字。甘特开箱可用，单选可下拉筛选（`9506a58`） |
+| base 里多一张空"数据表" | Bitable API 建 base 时自动生成默认表，无 API 可删 | 无害；可在 UI 手动删 |
+| 其中一张发版表删不掉（403） | 清理旧表时该表返回 403（资源级，重试无效） | 需在 UI 手动删旧 base（整个旧 base `REDACTED_OLD_BASE_TOKEN` 建议手动删除） |
+
+**迁移注意（已写入 README）**：旧 base 的表列类型是文本，无法原地升级——删除旧表/旧 base 后重新 `pulse feishu bind` + `pulse sync` 即可；本地需同步清空各实体的 `bitable_record_id/bitable_synced_hash`（本次 demo 迁移中踩过：残留旧 record_id 会导致 PUT 1254043 RecordIdNotFound，告警保留本地、可清后自愈）。
+
+**重建后核验（真实 API）**：新 base `REDACTED_BASE_TOKEN` 任务表列类型=任务名文本/状态单选/负责人文本/优先级单选/开始日期/截止日期/预估人日数字/版本单选/已废弃勾选 ✅；截止值 1788998400000 = 2026-09-10 UTC ✅；11 条任务全量在表；表格+甘特视图就绪 ✅。
+
+**新链接（替换旧的）**：
+- 多维表格：https://www.feishu.cn/base/REDACTED_BASE_TOKEN
+- 沉淀文档：重新 publish 后生成（bind 时新建）
