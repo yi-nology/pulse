@@ -74,3 +74,11 @@
 
 - 负责人/提测人/测试负责人/发布负责人全部改为**单选列**：选项即人员名单（zhangyi/codex/wangfang/claude/liwei 已自动生成），甘特视图里"分组→负责人"或"筛选→负责人"即可按人查看。
 - 踩坑记录：**对有值的列做 text→单选的就地 API 类型转换会丢值**（选项为空、记录读回 null）。恢复方式 = 本地 `bitable_synced_hash` 标脏 → sync 全字段重写（选项自动创建）。该教训已写入 README 升级说明。
+
+## 版本规划上线（真实租户驱动演示）
+
+- **版本表升级为"活"的版本规划视图**：sync 时 pulse 按任务实时计算 任务数/已完成/逾期/完成度 写入版本表（数字列）；任务状态一变，下次 sync 版本进度自动刷新。
+- 现网版本表已补 4 列并重写；驱动演示实测：v0.9 完成任务 #3 → sync → 完成度 33%→50% 自动更新到 Bitable ✅。
+- 版本规划报表已发布到新沉淀文档 `REDACTED_DOC_TOKEN`。
+- 用法：`pulse version add/update`（或 MCP）→ `pulse sync` → 飞书版本表实时进度；`pulse feishu publish --report versions` 沉淀规划文档。甘特视图"分组→版本"即为按版本的排期视图。
+- 已知噪音：网络抖动会让 records/search 首拉偶发超时（重试即好）；发版表旧 base 403 待手动删。

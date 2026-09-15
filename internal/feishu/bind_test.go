@@ -200,6 +200,8 @@ func TestBindCreatesBaseTablesViewDocAndSavesTokens(t *testing.T) {
 	wantFields(t, fake.calls[2].fields, []Field{
 		{Name: "版本名", Type: 1}, {Name: "目标日期", Type: 5},
 		{Name: "状态", Type: 3}, {Name: "备注", Type: 1},
+		{Name: "任务数", Type: 2}, {Name: "已完成", Type: 2},
+		{Name: "逾期", Type: 2}, {Name: "完成度", Type: 2},
 	})
 	// 甘特视图建在任务表上
 	if got := fake.calls[3].args; got[0] != "appT" || got[1] != "tblTask" || got[2] != "甘特" || got[3] != "gantt" {

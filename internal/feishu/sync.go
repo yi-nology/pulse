@@ -220,6 +220,16 @@ func (ss *syncSession) warn(format string, args ...any) {
 // storeTimeLayout 与 store 落库的时间文本格式一致（UTC，无时区后缀）。
 const storeTimeLayout = "2006-01-02 15:04:05"
 
+// versionFields 是 VersionToFields 的会话包装：附带按 tasks 实时计算的版本进度
+// （任务数/已完成/逾期/完成度），使版本表在飞书侧成为"活"的版本规划视图。
+func (ss *syncSession) versionFields(v model.Version) map[string]any {
+	prog, err := ss.s.VersionProgress(ss.p.ID, v.ID)
+	if err != nil {
+		prog = store.VersionProgress{} // 统计失败按零值推送，不阻塞同步
+	}
+	return VersionToFields(v, prog)
+}
+
 // warnRecentLocalOverwrite 是 LWW 覆盖的 UX 增强（E2E-3，不改变合并语义）：
 // 双机 autopush 场景下后写者赢，被覆盖方在 sync 输出中原本毫无感知。判定基准是
 // synced_at（本行上次与飞书收敛的时刻，随 bitable_synced_hash 同点写入）：远端记录
@@ -303,7 +313,7 @@ func (ss *syncSession) pushVersions() error {
 		return fmt.Errorf("加载版本失败: %w", err)
 	}
 	for _, v := range versions {
-		fields := VersionToFields(v)
+		fields := ss.versionFields(v)
 		hash := ContentHash(fields)
 		if hash == v.BitableSyncedHash {
 			continue // 与上次同步一致，免调用
@@ -489,16 +499,16 @@ func (ss *syncSession) pullVersions() error {
 			ss.verNameToID[v.Name] = v.ID
 			byName[v.Name] = v
 			byRecord[rec.RecordID] = v
-			if !ss.markPulled("version", v.ID, rec.RecordID, ContentHash(VersionToFields(v))) {
+			if !ss.markPulled("version", v.ID, rec.RecordID, ContentHash(ss.versionFields(v))) {
 				failures.note(rec.LastModifiedTime)
 				continue
 			}
 			ss.res.Pulled++
 			continue
 		}
-		remoteFields := VersionToFields(changed)
+		remoteFields := ss.versionFields(changed)
 		remoteHash := ContentHash(remoteFields)
-		if echo, _ := ss.lwwPlan("version", VersionToFields(local), local.BitableSyncedHash,
+		if echo, _ := ss.lwwPlan("version", ss.versionFields(local), local.BitableSyncedHash,
 			ss.versionAncestor[local.ID], local.ID, remoteHash, remoteFields); echo {
 			ss.res.SkippedEcho++
 			continue

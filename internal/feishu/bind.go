@@ -51,6 +51,12 @@ func versionTableFields() []Field {
 		{Name: "目标日期", Type: fieldTypeDate},
 		{Name: "状态", Type: fieldTypeSingleSelect},
 		{Name: "备注", Type: fieldTypeText},
+		// 进度四列由 pulse 按 tasks 实时计算写入（pull 侧只读忽略），
+		// 版本表在飞书侧即是"活"的版本规划视图。
+		{Name: "任务数", Type: fieldTypeNumber},
+		{Name: "已完成", Type: fieldTypeNumber},
+		{Name: "逾期", Type: fieldTypeNumber},
+		{Name: "完成度", Type: fieldTypeNumber},
 	}
 }
 

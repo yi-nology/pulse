@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zhangyi/pulse/internal/model"
+	"github.com/zhangyi/pulse/internal/store"
 )
 
 // DeprecatedHash 是 archived 行 bitable_synced_hash 的终态值：墓碑已推送，
@@ -131,16 +132,30 @@ var taskFieldSet = map[string]bool{
 }
 
 // VersionToFields 把本地版本映射为 Bitable 字段（版本表无已废弃列：版本无软删语义）。
-func VersionToFields(v model.Version) map[string]any {
+// 任务数/已完成/逾期/完成度由 pulse 按 tasks 实时计算写入——版本表在飞书侧即是
+// "活"的版本规划视图；这些列在 pull 侧只读忽略（versionComputedFields）。
+func VersionToFields(v model.Version, prog store.VersionProgress) map[string]any {
 	fields := map[string]any{
 		"版本名": v.Name,
 		"状态":  v.Status,
 		"备注":  v.Notes,
+		"任务数": prog.Total,
+		"已完成": prog.Done,
+		"逾期":  prog.Overdue,
+		"完成度": donePercent(prog),
 	}
 	if c := dateToCell(v.TargetDate); c != nil {
 		fields["目标日期"] = c
 	}
 	return fields
+}
+
+// donePercent 完成度百分比（四舍五入；无任务为 0）。
+func donePercent(p store.VersionProgress) int {
+	if p.Total == 0 {
+		return 0
+	}
+	return int(float64(p.Done)/float64(p.Total)*100 + 0.5)
 }
 
 // versionRequiredFields 是 pull 侧版本记录的必填列。
@@ -176,8 +191,12 @@ func FieldsToVersion(f map[string]any, local model.Version) (changed model.Versi
 	return changed, nil, warnings
 }
 
-// versionFieldSet 是 VersionToFields 产出的键集合。
-var versionFieldSet = map[string]bool{"版本名": true, "目标日期": true, "状态": true, "备注": true}
+// versionFieldSet 是 VersionToFields 产出的键集合（含 pulse 计算写入、pull 侧
+// 只读忽略的任务数/已完成/逾期/完成度）。
+var versionFieldSet = map[string]bool{
+	"版本名": true, "目标日期": true, "状态": true, "备注": true,
+	"任务数": true, "已完成": true, "逾期": true, "完成度": true,
+}
 
 // —— 远端值的宽松取值助手（Bitable 各列类型的回传形态可能随端点微差）—————————————————
 

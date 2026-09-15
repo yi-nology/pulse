@@ -188,3 +188,25 @@ func (s *Store) UpdateVersion(id int64, ch VersionChanges, actor model.Member, b
 	v, _, err := s.GetVersion(id)
 	return v, err
 }
+
+// VersionProgress 是版本的任务进度统计（供版本规划视图与飞书同步使用）。
+type VersionProgress struct {
+	Total   int // 版本内未归档任务总数
+	Done    int // 其中已完成数
+	Overdue int // 其中逾期数（due < today 且未 done）
+}
+
+// VersionProgress 统计某版本的任务进度（无任务返回全零）。
+func (s *Store) VersionProgress(projectID, versionID int64) (VersionProgress, error) {
+	var p VersionProgress
+	err := s.db.QueryRow(`SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status != 'done' AND due_date != '' AND due_date < strftime('%Y-%m-%d','now') THEN 1 ELSE 0 END), 0)
+		FROM tasks WHERE project_id = ? AND version_id = ? AND archived = 0`,
+		projectID, versionID).Scan(&p.Total, &p.Done, &p.Overdue)
+	if err != nil {
+		return p, fmt.Errorf("version progress: %w", err)
+	}
+	return p, nil
+}
