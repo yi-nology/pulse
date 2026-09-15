@@ -2,13 +2,15 @@
 
 > 2026-09-15，最终审查结论 With fixes → 修复波 eef07fe 后收口。以下为审查裁定 DEFER 的快速改进项与真实使用前置条件。
 
-## 建议尽快做（小改动）
+## 建议尽快做（小改动）—— ✅ 已全部完成（2026-09-15 打磨波+遗留批次 ee83ed9..a2c610c）
 
-1. 从 `internal/rules` 导出 `BlockedDaysDefault`/`LoadHorizonDays` 常量，`internal/mcpserver/server.go` 与 `internal/reports/weekly.go`、`workload.go` 改为引用，消除三处重复。
-2. `dependencies` 表加 `CREATE UNIQUE INDEX IF NOT EXISTS idx_dep ON dependencies(task_id, depends_on_task_id)`，并把冲突映射到 `ErrDuplicateDependency`（增量 schema 变更，对现有库安全）——关闭已 parked 的 TOCTOU。
-3. `AutopushFunc` 钩子带上 agent 名（PULSE_ACTOR），让 MCP 触发的 sync_conflict/pull-archive activity 归因到 agent 而非人类。
-4. README 增加"已知限制"一节：publish 追加不去重；Bitable 日期列为 text（甘特需手动改列类型）；Bitable 状态列不校验，非法值会钉住该记录直到修复。
-5. `.gitignore` 的 `pulse` 改为 `/pulse`（避免误忽略任意深度的同名目录）。
+1. ~~rules 常量导出~~ ✅ ee83ed9
+2. ~~dependencies 唯一索引~~ ✅ ee83ed9（idx_dependencies_pair + ErrDuplicateDependency 映射）
+3. ~~AutopushFunc 归因 agent~~ ✅ 001a658（BestEffort/AutopushFunc 携带 agentName）
+4. ~~README 已知限制~~ ✅ ee83ed9 + 后续补充（列类型升级/协作文档分叉/需求ID 错链）
+5. ~~.gitignore `/pulse`~~ ✅ ee83ed9
+
+另已完成的原 v1.2 候选：tasks `--requirement` 写路径（a33814d，模板文案同步回改）、conclude_review/create_meeting MCP（4d273f7）、REAL-2 create 超时防重复（2ba05e8 + a2c610c 归一化修复）、网络超时补试（f86e5b8）、BlockAppend 失败回写 token 缓解孤儿（8955b9c）、Mimosa 完整深度扫描 0 发现（scan-2026-09-15T14-33-51，seal sha256:1898d2c9…）。
 
 ## 真实使用前必须人工过一遍
 
