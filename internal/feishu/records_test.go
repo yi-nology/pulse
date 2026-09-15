@@ -110,7 +110,7 @@ func TestEnsureRequirementDocTemplate(t *testing.T) {
 		"12:负责人：alice", // owner 经成员表换名
 		"12:优先级：2",
 		"4:关联任务提示",
-		"12:行动项需跟踪时可用 pulse task add 建任务",
+		"12:行动项请用 pulse task add --requirement <id> 跟踪",
 	})
 
 	saved, _, err := s.GetRequirement(r.ID)

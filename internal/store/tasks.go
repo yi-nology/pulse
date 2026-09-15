@@ -32,30 +32,32 @@ type TaskFilter struct {
 }
 
 // TaskChanges UpdateTask 的增量变更集；nil 指针 = 不修改该字段。
-// AssigneeID/VersionID 指向 0 表示清空（落 NULL）。
+// AssigneeID/VersionID/RequirementID 指向 0 表示清空（落 NULL）。
 type TaskChanges struct {
 	Title, Description, Status, StartDate, DueDate *string
-	AssigneeID, VersionID, Priority                *int64
+	AssigneeID, VersionID, RequirementID, Priority *int64
 	EstimateDays                                   *float64
 }
 
 const taskCols = `id, project_id, title, description, assignee_id, status, priority,
-	estimate_days, start_date, due_date, version_id, bitable_record_id, bitable_synced_hash,
-	synced_at, archived, status_changed_at, created_at, updated_at`
+	estimate_days, start_date, due_date, version_id, requirement_id, bitable_record_id,
+	bitable_synced_hash, synced_at, archived, status_changed_at, created_at, updated_at`
 
-// scanTask 从一行结果扫描出 model.Task（assignee_id/version_id 为可空列，NULL 映射 0）。
+// scanTask 从一行结果扫描出 model.Task（assignee_id/version_id/requirement_id 为可空
+// 列，NULL 映射 0）。
 func scanTask(scan func(dest ...any) error) (model.Task, error) {
 	var t model.Task
-	var assigneeID, versionID sql.NullInt64
+	var assigneeID, versionID, requirementID sql.NullInt64
 	var archived int
 	if err := scan(&t.ID, &t.ProjectID, &t.Title, &t.Description, &assigneeID, &t.Status,
-		&t.Priority, &t.EstimateDays, &t.StartDate, &t.DueDate, &versionID,
+		&t.Priority, &t.EstimateDays, &t.StartDate, &t.DueDate, &versionID, &requirementID,
 		&t.BitableRecordID, &t.BitableSyncedHash, &t.SyncedAt, &archived,
 		&t.StatusChangedAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return model.Task{}, err
 	}
 	t.AssigneeID = assigneeID.Int64
 	t.VersionID = versionID.Int64
+	t.RequirementID = requirementID.Int64
 	t.Archived = archived != 0
 	return t, nil
 }
@@ -102,8 +104,22 @@ func taskActivity(projectID, taskID int64, actor model.Member, behalf *model.Mem
 	}
 }
 
+// ensureRequirementInProject 校验需求存在且属于 projectID；不存在、或存在但属于其它
+// 项目（跨项目同 id 撞号）时统一报「需求不存在」（同 v1.1 惯例，不泄露跨项目存在性）。
+func ensureRequirementInProject(tx *sql.Tx, projectID, requirementID int64) error {
+	var pid int64
+	err := tx.QueryRow(`SELECT project_id FROM requirements WHERE id = ?`, requirementID).Scan(&pid)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && pid != projectID) {
+		return fmt.Errorf("需求不存在: id=%d", requirementID)
+	}
+	if err != nil {
+		return fmt.Errorf("load requirement id=%d: %w", requirementID, err)
+	}
+	return nil
+}
+
 // CreateTask 创建任务并落 create 活动（与写入同一事务）；status 留空补 todo，
-// priority 为 0 补缺省 3，status 非法时报错。
+// priority 为 0 补缺省 3，status 非法时报错；requirement_id 须存在且属于同项目。
 func (s *Store) CreateTask(t model.Task, actor model.Member, behalf *model.Member) (model.Task, error) {
 	status := t.Status
 	if status == "" {
@@ -121,11 +137,16 @@ func (s *Store) CreateTask(t model.Task, actor model.Member, behalf *model.Membe
 		return model.Task{}, fmt.Errorf("begin create task: %w", err)
 	}
 	defer tx.Rollback()
+	if t.RequirementID != 0 { // 跨项目守卫：需求存在但 ProjectID 不符按不存在拒绝
+		if err := ensureRequirementInProject(tx, t.ProjectID, t.RequirementID); err != nil {
+			return model.Task{}, err
+		}
+	}
 	res, err := tx.Exec(`INSERT INTO tasks
-		(project_id, title, description, assignee_id, status, priority, estimate_days, start_date, due_date, version_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(project_id, title, description, assignee_id, status, priority, estimate_days, start_date, due_date, version_id, requirement_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ProjectID, t.Title, t.Description, nullID(t.AssigneeID), status, priority,
-		t.EstimateDays, t.StartDate, t.DueDate, nullID(t.VersionID))
+		t.EstimateDays, t.StartDate, t.DueDate, nullID(t.VersionID), nullID(t.RequirementID))
 	if err != nil {
 		return model.Task{}, fmt.Errorf("insert task %q: %w", t.Title, err)
 	}
@@ -215,6 +236,16 @@ func (s *Store) UpdateTask(id int64, ch TaskChanges, actor model.Member, behalf 
 		sets = append(sets, "version_id = ?")
 		args = append(args, nullID(*ch.VersionID))
 		change("version_id", "update", old.VersionID, *ch.VersionID)
+	}
+	if ch.RequirementID != nil && *ch.RequirementID != old.RequirementID {
+		if *ch.RequirementID != 0 { // 0 = 清空关联，无须校验
+			if err := ensureRequirementInProject(tx, old.ProjectID, *ch.RequirementID); err != nil {
+				return model.Task{}, err
+			}
+		}
+		sets = append(sets, "requirement_id = ?")
+		args = append(args, nullID(*ch.RequirementID))
+		change("requirement_id", "update", old.RequirementID, *ch.RequirementID)
 	}
 	if ch.Priority != nil && *ch.Priority != int64(old.Priority) {
 		sets = append(sets, "priority = ?")

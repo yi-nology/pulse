@@ -32,6 +32,7 @@ type Task struct {
 	EstimateDays         float64
 	StartDate, DueDate   string
 	VersionID            int64 // 0 = 无版本
+	RequirementID        int64 // 0 = 无关联需求（需求拆解为任务，spec §3.1；本地引用，不参与 Bitable 同步）
 	BitableRecordID      string
 	BitableSyncedHash    string
 	SyncedAt             string // 本行上次与飞书收敛的时刻（UTC 文本，sync 覆盖警告的判定基准）

@@ -219,7 +219,7 @@ func requirementDocBlocks(s *store.Store, r model.Requirement) ([]map[string]any
 		bulletBlock("负责人：" + displayName(names, r.OwnerID)),
 		bulletBlock(fmt.Sprintf("优先级：%d", r.Priority)),
 		headingBlock("关联任务提示"),
-		bulletBlock("行动项需跟踪时可用 pulse task add 建任务"),
+		bulletBlock("行动项请用 pulse task add --requirement <id> 跟踪"),
 	}, nil
 }
 

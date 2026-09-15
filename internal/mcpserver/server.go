@@ -199,33 +199,35 @@ type listTasksIn struct {
 }
 
 type addTaskIn struct {
-	Project      string   `json:"project" jsonschema:"项目 key（必填）"`
-	Title        string   `json:"title" jsonschema:"任务标题（必填）"`
-	Assignee     *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己"`
-	Status       string   `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done，缺省 todo"`
-	Priority     *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先，缺省 3"`
-	EstimateDays *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
-	Start        string   `json:"start,omitempty" jsonschema:"开始日期 YYYY-MM-DD"`
-	Due          string   `json:"due,omitempty" jsonschema:"截止日期 YYYY-MM-DD"`
-	Version      string   `json:"version,omitempty" jsonschema:"版本 ID 或项目内版本名"`
-	Desc         string   `json:"desc,omitempty" jsonschema:"任务描述"`
-	DelegatedBy  string   `json:"delegated_by,omitempty" jsonschema:"agent 代表执行的人类成员名（activity 记 on_behalf_of）"`
+	Project       string   `json:"project" jsonschema:"项目 key（必填）"`
+	Title         string   `json:"title" jsonschema:"任务标题（必填）"`
+	Assignee      *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己"`
+	Status        string   `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done，缺省 todo"`
+	Priority      *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先，缺省 3"`
+	EstimateDays  *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
+	Start         string   `json:"start,omitempty" jsonschema:"开始日期 YYYY-MM-DD"`
+	Due           string   `json:"due,omitempty" jsonschema:"截止日期 YYYY-MM-DD"`
+	Version       string   `json:"version,omitempty" jsonschema:"版本 ID 或项目内版本名"`
+	RequirementID *int64   `json:"requirement_id,omitempty" jsonschema:"关联需求 ID（须已存在且属于本项目）"`
+	Desc          string   `json:"desc,omitempty" jsonschema:"任务描述"`
+	DelegatedBy   string   `json:"delegated_by,omitempty" jsonschema:"agent 代表执行的人类成员名（activity 记 on_behalf_of）"`
 }
 
 // updateTaskIn 与 add_task 可选字段同表；另补 title/desc（CLI task update 同语义）。
-// 指针字段区分"未传"与"传空串清空"（assignee/version 空串即清空）。
+// 指针字段区分"未传"与"传空串清空"（assignee/version 空串即清空；requirement_id 传 0 清除关联）。
 type updateTaskIn struct {
-	ID           int64    `json:"id" jsonschema:"任务 ID（必填，先 list_tasks 确认）"`
-	Title        *string  `json:"title,omitempty" jsonschema:"新标题"`
-	Desc         *string  `json:"desc,omitempty" jsonschema:"任务描述"`
-	Assignee     *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己；空串清空"`
-	Status       *string  `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done"`
-	Priority     *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先"`
-	EstimateDays *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
-	Start        *string  `json:"start,omitempty" jsonschema:"开始日期 YYYY-MM-DD"`
-	Due          *string  `json:"due,omitempty" jsonschema:"截止日期 YYYY-MM-DD"`
-	Version      *string  `json:"version,omitempty" jsonschema:"版本 ID 或项目内版本名；空串清除版本"`
-	DelegatedBy  string   `json:"delegated_by,omitempty" jsonschema:"agent 代表执行的人类成员名"`
+	ID            int64    `json:"id" jsonschema:"任务 ID（必填，先 list_tasks 确认）"`
+	Title         *string  `json:"title,omitempty" jsonschema:"新标题"`
+	Desc          *string  `json:"desc,omitempty" jsonschema:"任务描述"`
+	Assignee      *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己；空串清空"`
+	Status        *string  `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done"`
+	Priority      *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先"`
+	EstimateDays  *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
+	Start         *string  `json:"start,omitempty" jsonschema:"开始日期 YYYY-MM-DD"`
+	Due           *string  `json:"due,omitempty" jsonschema:"截止日期 YYYY-MM-DD"`
+	Version       *string  `json:"version,omitempty" jsonschema:"版本 ID 或项目内版本名；空串清除版本"`
+	RequirementID *int64   `json:"requirement_id,omitempty" jsonschema:"关联需求 ID（须已存在且属于本项目）；0 清除关联"`
+	DelegatedBy   string   `json:"delegated_by,omitempty" jsonschema:"agent 代表执行的人类成员名"`
 }
 
 type addDependencyIn struct {
@@ -481,6 +483,12 @@ func (c *core) addTask(_ context.Context, _ *mcp.CallToolRequest, in addTaskIn) 
 			return nil, nil, err
 		}
 	}
+	if in.RequirementID != nil && *in.RequirementID != 0 { // 校验与 CLI/store 同文案
+		if err := c.requireLinkedRequirement(p.ID, *in.RequirementID); err != nil {
+			return nil, nil, err
+		}
+		t.RequirementID = *in.RequirementID
+	}
 	created, err := c.st.CreateTask(t, a, behalf) // create 活动由 store 落库
 	if err != nil {
 		return nil, nil, err
@@ -545,6 +553,18 @@ func (c *core) updateTask(_ context.Context, _ *mcp.CallToolRequest, in updateTa
 			return nil, nil, err
 		}
 		ch.VersionID = &vid // ResolveVersionID("") → 0 → 清除版本
+	}
+	if in.RequirementID != nil {
+		if *in.RequirementID != 0 { // 0 = 清除关联，无须校验；其余按任务所属项目校验
+			old, _, err := c.st.GetTask(in.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := c.requireLinkedRequirement(old.ProjectID, *in.RequirementID); err != nil {
+				return nil, nil, err
+			}
+		}
+		ch.RequirementID = in.RequirementID
 	}
 	a, behalf, err := c.resolve(in.DelegatedBy)
 	if err != nil {

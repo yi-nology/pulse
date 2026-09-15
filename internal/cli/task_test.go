@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -295,6 +297,93 @@ func TestTaskAssigneeResolvesExistingMember(t *testing.T) {
 	}
 	if codexN != 1 || agentN != 1 {
 		t.Fatalf("codex must stay a single agent member: codexN=%d agentN=%d members=%+v", codexN, agentN, ms)
+	}
+}
+
+// TestTaskRequirementLink task add/update --requirement 的写路径：关联落库 +
+// requirement_id 变更活动；不存在的需求与跨项目同 id 需求均按「需求不存在」拒绝。
+func TestTaskRequirementLink(t *testing.T) {
+	s, _, _ := testEnv(t)
+	if _, _, err := runCLI(t, "init", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	p, found, err := s.GetProjectByKey("demo")
+	if err != nil || !found {
+		t.Fatalf("project: found=%v err=%v", found, err)
+	}
+	tester, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := s.CreateRequirement(model.Requirement{ProjectID: p.ID, Title: "需求A"}, tester, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 另一个项目内的同号需求（跨项目守卫的拒绝对象）
+	other, err := s.CreateProject("other", "另一个项目", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqOther, err := s.CreateRequirement(model.Requirement{ProjectID: other.ID, Title: "别家需求"}, tester, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// add --requirement：关联落库
+	out, errOut, err := runCLI(t, "task", "add", "需求落地", "--project", "demo",
+		"--requirement", strconv.FormatInt(req.ID, 10))
+	if err != nil {
+		t.Fatalf("task add --requirement failed: %v stderr=%s", err, errOut)
+	}
+	if want := "任务已创建: 需求落地 (id=1)"; !strings.Contains(out, want) {
+		t.Fatalf("stdout %q must contain %q", out, want)
+	}
+	tk, found, err := s.GetTask(1)
+	if err != nil || !found {
+		t.Fatalf("task 1: found=%v err=%v", found, err)
+	}
+	if tk.RequirementID != req.ID {
+		t.Fatalf("task.RequirementID = %d, want %d", tk.RequirementID, req.ID)
+	}
+	requireLastTaskActivity(t, s, p.ID, "create", "{}")
+
+	// update --requirement：改关联到本项目另一需求，activity 记 field=requirement_id
+	reqB, err := s.CreateRequirement(model.Requirement{ProjectID: p.ID, Title: "需求B"}, tester, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = runCLI(t, "task", "update", "1", "--requirement", strconv.FormatInt(reqB.ID, 10))
+	if err != nil {
+		t.Fatalf("task update --requirement failed: %v stderr=%s", err, errOut)
+	}
+	requireLastTaskActivity(t, s, p.ID, "update", `"field":"requirement_id","from":`+strconv.FormatInt(req.ID, 10))
+	tk, _, err = s.GetTask(1)
+	if err != nil || tk.RequirementID != reqB.ID {
+		t.Fatalf("updated RequirementID = %d, want %d (%v)", tk.RequirementID, reqB.ID, err)
+	}
+
+	// update --requirement 0：清除关联（落 NULL）
+	if _, _, err := runCLI(t, "task", "update", "1", "--requirement", "0"); err != nil {
+		t.Fatal(err)
+	}
+	tk, _, err = s.GetTask(1)
+	if err != nil || tk.RequirementID != 0 {
+		t.Fatalf("cleared RequirementID = %d, want 0 (%v)", tk.RequirementID, err)
+	}
+
+	// 不存在的需求：拒绝
+	if _, errOut, err = runCLI(t, "task", "add", "x", "--project", "demo", "--requirement", "999"); err == nil {
+		t.Fatal("task add --requirement 999 must fail")
+	} else if !strings.Contains(errOut, "需求不存在: id=999") {
+		t.Fatalf("stderr %q must contain 需求不存在: id=999", errOut)
+	}
+
+	// 跨项目需求（存在但 project 不符）：按不存在拒绝，不泄露存在性
+	if _, errOut, err = runCLI(t, "task", "update", "1", "--requirement",
+		strconv.FormatInt(reqOther.ID, 10)); err == nil {
+		t.Fatal("cross-project requirement must be refused")
+	} else if !strings.Contains(errOut, fmt.Sprintf("需求不存在: id=%d", reqOther.ID)) {
+		t.Fatalf("stderr %q must contain 需求不存在: id=%d", errOut, reqOther.ID)
 	}
 }
 

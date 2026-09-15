@@ -559,6 +559,70 @@ func TestToolDescriptions(t *testing.T) {
 	}
 }
 
+// TestTaskRequirementLinkViaMCP add_task/update_task 的 requirement_id 可选参数：
+// 关联落库且 create 活动归因照常（actor=agent、on_behalf_of 经 delegated_by）；
+// 不存在/跨项目的需求按「需求不存在」拒绝；0 清除关联。
+func TestTaskRequirementLinkViaMCP(t *testing.T) {
+	s := testEnv(t)
+	p := requireProject(t, s, "demo")
+	other := requireProject(t, s, "other")
+	tester, err := s.GetOrCreateMember("tester", "human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := s.CreateRequirement(model.Requirement{ProjectID: p.ID, Title: "需求A"}, tester, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqOther, err := s.CreateRequirement(model.Requirement{ProjectID: other.ID, Title: "别家需求"}, tester, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sc := connect(t, s, "claude")
+	created := decode(t, callTool(t, sc, "add_task", map[string]any{
+		"project": "demo", "title": "t1", "requirement_id": req.ID, "delegated_by": "zhang"}))
+	if created["RequirementID"] != float64(req.ID) {
+		t.Fatalf("add_task RequirementID = %v, want %d: %s", created["RequirementID"], req.ID, string(mustJSON(created)))
+	}
+	// 归因照常：create 活动执行者是 agent，on_behalf_of 记 zhang
+	agent := memberByName(t, s, "claude")
+	zhang := memberByName(t, s, "zhang")
+	var sawCreate bool
+	for _, a := range activities(t, s, p.ID) {
+		if a.EntityType == "task" && a.Action == "create" {
+			if a.ActorID != agent.ID || a.OnBehalfOf != zhang.ID {
+				t.Fatalf("create 活动 actor=%d behalf=%d, want agent %d on behalf of %d",
+					a.ActorID, a.OnBehalfOf, agent.ID, zhang.ID)
+			}
+			sawCreate = true
+		}
+	}
+	if !sawCreate {
+		t.Fatalf("task create 活动缺失: %+v", activities(t, s, p.ID))
+	}
+
+	// update_task 换关联 + 0 清除
+	updated := decode(t, callTool(t, sc, "update_task", map[string]any{"id": created["ID"], "requirement_id": 0}))
+	if updated["RequirementID"] != float64(0) {
+		t.Fatalf("update_task requirement_id=0 必须清除关联: %s", string(mustJSON(updated)))
+	}
+	updated = decode(t, callTool(t, sc, "update_task", map[string]any{"id": created["ID"], "requirement_id": req.ID}))
+	if updated["RequirementID"] != float64(req.ID) {
+		t.Fatalf("update_task RequirementID = %v, want %d", updated["RequirementID"], req.ID)
+	}
+
+	// 不存在 / 跨项目：均按 需求不存在 拒绝
+	if msg := callToolErr(t, sc, "add_task", map[string]any{
+		"project": "demo", "title": "t2", "requirement_id": 999}); !strings.Contains(msg, "需求不存在: id=999") {
+		t.Fatalf("add_task 不存在需求须报错: %s", msg)
+	}
+	if msg := callToolErr(t, sc, "update_task", map[string]any{
+		"id": created["ID"], "requirement_id": reqOther.ID}); !strings.Contains(msg, "需求不存在") {
+		t.Fatalf("update_task 跨项目需求须报错: %s", msg)
+	}
+}
+
 // TestUpdateArchivedTaskRejected 已软删任务对 update_task 只读：工具必须以 isError
 // 报「任务已删除」，不得给持有过期 id 的代理返回虚假成功（否则编辑永远不进共享表）。
 func TestUpdateArchivedTaskRejected(t *testing.T) {

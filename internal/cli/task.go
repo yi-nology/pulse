@@ -141,7 +141,7 @@ func newTaskDepCmd() *cobra.Command {
 // newTaskAddCmd 实现 `pulse task add <title> --project K`。
 func newTaskAddCmd() *cobra.Command {
 	var projectKey, assignee, status, start, due, version, desc string
-	var priority int64
+	var priority, requirement int64
 	var estimate float64
 	cmd := &cobra.Command{
 		Use:   "add <title>",
@@ -189,6 +189,9 @@ func newTaskAddCmd() *cobra.Command {
 				}
 				t.VersionID = vid
 			}
+			if requirement != 0 { // 存在性 + 跨项目校验由 store.CreateTask 落库前执行
+				t.RequirementID = requirement
+			}
 			tk, err := s.CreateTask(t, a, behalf) // create 活动由 store 落库
 			if err != nil {
 				return err
@@ -206,6 +209,7 @@ func newTaskAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&start, "start", "", "开始日期 YYYY-MM-DD")
 	cmd.Flags().StringVar(&due, "due", "", "截止日期 YYYY-MM-DD")
 	cmd.Flags().StringVar(&version, "version", "", "版本：版本 ID 整数，或项目内版本名（版本名需已创建，versions 表为空时会报错）")
+	cmd.Flags().Int64Var(&requirement, "requirement", 0, "关联需求 ID（须已存在且属于本项目；不存在或跨项目报 需求不存在）")
 	cmd.Flags().StringVar(&desc, "desc", "", "任务描述")
 	return cmd
 }
@@ -273,7 +277,7 @@ func newTaskListCmd() *cobra.Command {
 // 活动与时间戳刷新由 store.UpdateTask 在单事务内完成。
 func newTaskUpdateCmd() *cobra.Command {
 	var title, desc, status, assignee, start, due, version string
-	var priority int64
+	var priority, requirement int64
 	var estimate float64
 	cmd := &cobra.Command{
 		Use:   "update <id>",
@@ -346,6 +350,9 @@ func newTaskUpdateCmd() *cobra.Command {
 				}
 				ch.VersionID = &vid
 			}
+			if flags.Changed("requirement") { // 传 0 清除关联；存在性/跨项目校验由 store 落库前执行
+				ch.RequirementID = &requirement
+			}
 			tk, err := s.UpdateTask(id, ch, a, behalf)
 			if err != nil {
 				return err
@@ -364,6 +371,7 @@ func newTaskUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&start, "start", "", "开始日期 YYYY-MM-DD")
 	cmd.Flags().StringVar(&due, "due", "", "截止日期 YYYY-MM-DD")
 	cmd.Flags().StringVar(&version, "version", "", "版本：版本 ID 整数，或项目内版本名（版本名需已创建，versions 表为空时会报错）；传空串清除版本")
+	cmd.Flags().Int64Var(&requirement, "requirement", 0, "关联需求 ID（须已存在且属于本项目；不存在或跨项目报 需求不存在）；传 0 清除关联")
 	return cmd
 }
 
