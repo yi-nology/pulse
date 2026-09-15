@@ -54,7 +54,13 @@ func requireProjectFlag(s *store.Store, key string) (model.Project, error) {
 // 支持"人给 agent 派活"）；未命中再按 human 创建。显式传空串表示清空负责人（返回 0）。
 // changed=false 时返回 (nil, 0, nil)。
 func resolveAssigneeFlag(s *store.Store, cmd *cobra.Command, name string) (*int64, int64, error) {
-	if !cmd.Flags().Changed("assignee") {
+	return resolveMemberFlag(s, cmd, "assignee", name)
+}
+
+// resolveMemberFlag resolveAssigneeFlag 的按旗标名泛化版，供 --owner/--manager/
+// --test-owner 等成员旗标复用同一语义（已有成员直接使用，不存在则按 human 创建）。
+func resolveMemberFlag(s *store.Store, cmd *cobra.Command, flagName, name string) (*int64, int64, error) {
+	if !cmd.Flags().Changed(flagName) {
 		return nil, 0, nil
 	}
 	if name == "" {
@@ -72,6 +78,19 @@ func resolveAssigneeFlag(s *store.Store, cmd *cobra.Command, name string) (*int6
 		}
 	}
 	return &m.ID, m.ID, nil
+}
+
+// memberNames 全量成员 ID→名映射（成员为全局资源，不分项目；列表命令展示用）。
+func memberNames(s *store.Store) (map[int64]string, error) {
+	ms, err := s.ListMembers()
+	if err != nil {
+		return nil, err
+	}
+	names := map[int64]string{}
+	for _, m := range ms {
+		names[m.ID] = m.Name
+	}
+	return names, nil
 }
 
 // newTaskCmd 实现 `pulse task` 子命令组。

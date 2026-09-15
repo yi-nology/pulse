@@ -144,6 +144,14 @@ func autopushForVersion(cmd *cobra.Command, s *store.Store, cfg *config.Config, 
 	}
 }
 
+// autopushForEntityProject 供六实体（需求/评审/会议/bug/提测/发版）中没有 --project
+// 旗标的写命令（update/conclude）接线：写路径已返回实体，按其 ProjectID 反查项目。
+func autopushForEntityProject(cmd *cobra.Command, s *store.Store, cfg *config.Config, projectID int64) {
+	if p, found := projectByID(s, projectID); found {
+		bestEffort(cmd, s, cfg, p.Key)
+	}
+}
+
 // projectByID 按 ID 找项目（项目数很小，线性扫描即可）。
 func projectByID(s *store.Store, id int64) (model.Project, bool) {
 	ps, err := s.ListProjects()
