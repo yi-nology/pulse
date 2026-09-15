@@ -1,2 +1,6 @@
 /pulse
 *.db
+.superpowers/
+.mimosa/
+.v2c/
+warn.txt
