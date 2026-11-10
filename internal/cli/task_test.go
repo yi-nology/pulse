@@ -69,8 +69,14 @@ func TestTaskAddAndList(t *testing.T) {
 		t.Fatalf("project: found=%v err=%v", found, err)
 	}
 
+	// 截止日用相对当前时刻的日期（issue #1 时间炸弹回归）：逾期过滤的判据是
+	// due_date < 今天（UTC，store.TaskFilter.OverdueOnly），夹具必须相对墙钟构造，
+	// 写死绝对日期会在日历翻过那天起必然翻红。
+	futureDue := time.Now().UTC().AddDate(0, 0, 7).Format("2006-01-02")
+	pastDue := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
 	out, errOut, err := runCLI(t, "task", "add", "写周报", "--project", "demo",
-		"--assignee", "alice", "--due", "2026-09-20", "--estimate", "2", "--priority", "2")
+		"--assignee", "alice", "--due", futureDue, "--estimate", "2", "--priority", "2")
 	if err != nil {
 		t.Fatalf("task add failed: %v stderr=%s", err, errOut)
 	}
@@ -113,19 +119,39 @@ func TestTaskAddAndList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task list failed: %v stderr=%s", err, errOut)
 	}
-	for _, want := range []string{"ID\t标题\t状态\t负责人\t截止\t版本", "写周报", "alice", "2026-09-20"} {
+	for _, want := range []string{"ID\t标题\t状态\t负责人\t截止\t版本", "写周报", "alice", futureDue} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout %q must contain %q", out, want)
 		}
 	}
-	// --status / --overdue 过滤不误伤
+	// --status 过滤不误伤
 	out, _, err = runCLI(t, "task", "list", "--project", "demo", "--status", "todo")
 	if err != nil || !strings.Contains(out, "写周报") {
 		t.Fatalf("status filter list: out=%q err=%v", out, err)
 	}
-	out, _, err = runCLI(t, "task", "list", "--project", "demo", "--overdue")
-	if err != nil || strings.Contains(out, "写周报") {
-		t.Fatalf("overdue filter must exclude future-due task: out=%q err=%v", out, err)
+	// --overdue 过滤正反对照（table-driven）：未来到期不进、过去到期必进——
+	// 两个方向都相对墙钟构造，任何日期跑这条用例结论不变。
+	if _, _, err := runCLI(t, "task", "add", "旧账", "--project", "demo",
+		"--assignee", "bob", "--due", pastDue); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		title    string
+		wantSeen bool
+	}{
+		{"未来到期不进 --overdue", "写周报", false},
+		{"过去到期进 --overdue", "旧账", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, err := runCLI(t, "task", "list", "--project", "demo", "--overdue")
+			if err != nil {
+				t.Fatalf("overdue list failed: %v", err)
+			}
+			if got := strings.Contains(out, tc.title); got != tc.wantSeen {
+				t.Fatalf("--overdue seen(%q)=%v want %v: out=%q", tc.title, got, tc.wantSeen, out)
+			}
+		})
 	}
 }
 

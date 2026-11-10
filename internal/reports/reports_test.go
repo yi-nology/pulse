@@ -186,37 +186,43 @@ func TestWeeklyCompletionAndAgentContribution(t *testing.T) {
 // TestWeeklyReopenedTaskAppearsInBothSections 完成与进行中正交可重叠（E2E-1）：
 // 本周完成过（窗口内有 to=="done" 的状态流转）但被 reopen 回 in_progress 的任务，
 // 必须同时出现在"本周完成"与"进行中"两节，而非只进其一。
+//
+// 夹具纪律（issue #1 时间炸弹回归）：活动时间戳必须与注入的 now 同源构造
+// （logTaskActivity 显式落窗内时刻）——此前用 UpdateTask 真实流转落活动，
+// CreatedAt 挂真实墙钟，注入 now 所在周（2026-09-14 ~ 09-20）被日历翻过后
+// 活动全部出窗，断言必然翻红。done→reopen 的真实流转链路由 store 层用例覆盖。
 func TestWeeklyReopenedTaskAppearsInBothSections(t *testing.T) {
 	s := newStore(t)
 	p := projectOf(t, s)
 	alice := actorOf(t, s)
 
-	// 真实流转：创建(todo) → done（update_status 活动）→ reopen 回 in_progress（reopen 活动）
-	t1 := taskOf(t, s, p.ID, func(m *model.Task) { m.Title = "返工任务" })
-	done := "done"
-	if _, err := s.UpdateTask(t1.ID, store.TaskChanges{Status: &done}, alice, nil); err != nil {
-		t.Fatal(err)
-	}
-	reopened := "in_progress"
-	tk, err := s.UpdateTask(t1.ID, store.TaskChanges{Status: &reopened}, alice, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tk.Status != "in_progress" {
-		t.Fatalf("reopened task status = %q, want in_progress", tk.Status)
-	}
+	// 现场与注入 now 对齐：任务当前 in_progress（reopen 后形态），窗口内一条
+	// to==done 状态流转 + 一条 reopen 流转。
+	t1 := taskOf(t, s, p.ID, func(m *model.Task) {
+		m.Title = "返工任务"
+		m.Status = "in_progress"
+	})
+	logTaskActivity(t, s, p.ID, alice, "update_status", t1.ID, statusDetail("todo", "done"), "2026-09-15 08:00:00")
+	logTaskActivity(t, s, p.ID, alice, "reopen", t1.ID, statusDetail("done", "in_progress"), "2026-09-15 09:00:00")
 
 	out, err := WeeklyMarkdown(s, p.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	doneSec := section(string(out), "本周完成")
-	if !strings.Contains(doneSec, "#1 返工任务") {
-		t.Fatalf("本周完成 must contain done-then-reopened task, got:\n%s", doneSec)
+	cases := []struct {
+		name string
+		sect string
+	}{
+		{"本周完成（窗口内有 to==done 流转）", "本周完成"},
+		{"进行中（当前状态 in_progress）", "进行中"},
 	}
-	wip := section(string(out), "进行中")
-	if !strings.Contains(wip, "#1 返工任务") {
-		t.Fatalf("进行中 must contain done-then-reopened task, got:\n%s", wip)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(section(string(out), tc.sect), "#1 返工任务") {
+				t.Fatalf("%s must contain done-then-reopened task, got:\n%s",
+					tc.sect, section(string(out), tc.sect))
+			}
+		})
 	}
 }
 
