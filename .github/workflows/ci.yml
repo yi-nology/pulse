@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27' # 与 go.mod 保持一致，禁 stable 漂移
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt 需处理：$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: 单元测试（race）
+        run: go test -race ./...
