@@ -202,7 +202,7 @@ type listTasksIn struct {
 type addTaskIn struct {
 	Project       string   `json:"project" jsonschema:"项目 key（必填）"`
 	Title         string   `json:"title" jsonschema:"任务标题（必填）"`
-	Assignee      *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己"`
+	Assignee      *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（已存在则直接用该成员，不存在则按 human 创建）；me 表示当前 agent 自己"`
 	Status        string   `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done，缺省 todo"`
 	Priority      *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先，缺省 3"`
 	EstimateDays  *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
@@ -220,7 +220,7 @@ type updateTaskIn struct {
 	ID            int64    `json:"id" jsonschema:"任务 ID（必填，先 list_tasks 确认）"`
 	Title         *string  `json:"title,omitempty" jsonschema:"新标题"`
 	Desc          *string  `json:"desc,omitempty" jsonschema:"任务描述"`
-	Assignee      *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（不存在则按 human 创建）；me 表示当前 agent 自己；空串清空"`
+	Assignee      *string  `json:"assignee,omitempty" jsonschema:"负责人成员名（已存在则直接用该成员，不存在则按 human 创建）；me 表示当前 agent 自己；空串清空"`
 	Status        *string  `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done"`
 	Priority      *int64   `json:"priority,omitempty" jsonschema:"优先级，数字越小越优先"`
 	EstimateDays  *float64 `json:"estimate_days,omitempty" jsonschema:"预估人日"`
@@ -387,9 +387,12 @@ func (c *core) assigneeFilter(name string) (int64, error) {
 }
 
 // assigneeWrite 写路径（add/update_task）的 assignee 解析："me" 一律解析为 agent
-// 自己（与执行 actor 同一成员，get-or-create）；其余名字按 human get-or-create。
-// 与 CLI 的纯 human 语义不同：MCP 工具入参由 LLM 生成，"me" 是最自然的指代，
-// 若按字面建 human 成员会误归属任务。
+// 自己（与执行 actor 同一成员，get-or-create）；其余名字**类型以库里既有成员
+// 为准**（GetOrCreateMemberAs），不存在才按 human 创建——已存在的 agent 成员
+// 是 pulse 核心使用形态（pulse --agent codex 建成 agent 成员），按 human 硬
+// get-or-create 会撞类型冲突把写路径整个打挂（issue #2）。与 CLI 的纯 human
+// 语义不同：MCP 工具入参由 LLM 生成，"me" 是最自然的指代，若按字面建 human
+// 成员会误归属任务。
 func (c *core) assigneeWrite(name string) (int64, error) {
 	if name == "me" {
 		a, _, err := c.resolve("")
@@ -398,7 +401,7 @@ func (c *core) assigneeWrite(name string) (int64, error) {
 		}
 		return a.ID, nil
 	}
-	m, err := c.st.GetOrCreateMember(name, "human")
+	m, err := c.st.GetOrCreateMemberAs(name, "human")
 	if err != nil {
 		return 0, err
 	}
