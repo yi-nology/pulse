@@ -41,12 +41,14 @@ func PublishReport(ctx context.Context, c *Client, s *store.Store, p model.Proje
 		return fmt.Errorf("report 必须为 weekly|versions|daily|all，收到 %q", report)
 	}
 
-	// 静默同步（仅已绑定 base 时）：失败只警告，基于本地数据继续发布。
+	// 静默同步（仅已绑定 base 时）：失败只警告，基于本地数据继续发布——
+	// 「静默」指不打断发布，不是不出声：执行者解析失败也必须把「同步被跳过、
+	// 报表基于本地数据」说出来，否则陈旧报表以退出码 0 无声沉淀（issue #2）。
 	if p.FeishuBitableAppToken != "" {
-		if a, _, err := actor.Resolve(s, actorName, "", ""); err == nil {
-			if _, err := SyncProject(ctx, c, s, p, a); err != nil {
-				fmt.Fprintf(warnWriter, "警告: 同步失败，将基于本地数据发布（恢复后执行 pulse sync 可补推）: %v\n", err)
-			}
+		if a, _, err := actor.Resolve(s, actorName, "", ""); err != nil {
+			fmt.Fprintf(warnWriter, "警告: 执行者 %q 解析失败，预发布同步已跳过（报表将基于本地数据）: %v\n", actorName, err)
+		} else if _, err := SyncProject(ctx, c, s, p, a); err != nil {
+			fmt.Fprintf(warnWriter, "警告: 同步失败，将基于本地数据发布（恢复后执行 pulse sync 可补推）: %v\n", err)
 		}
 	}
 

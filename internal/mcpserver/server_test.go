@@ -662,3 +662,62 @@ func TestMissingRequired(t *testing.T) {
 		t.Fatalf("invalid status must be rejected: %s", msg)
 	}
 }
+
+// TestAssigneeWriteToExistingAgentMember 写路径指派既有 agent 成员（issue #2 回归）：
+// add_task/update_task 的 assignee 名字命中已存在的 agent 成员时必须直接用该成员
+// ——修复前按 human 硬 get-or-create 撞类型冲突，写路径整个打挂；不存在的名字
+// 仍按 human 创建（schema 文案口径不变）。
+func TestAssigneeWriteToExistingAgentMember(t *testing.T) {
+	s := testEnv(t)
+	requireProject(t, s, "demo")
+	// 前提：codex 已是 agent 成员（pulse --agent codex 的核心使用形态）
+	agent, err := s.GetOrCreateMember("codex", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := connect(t, s, "claude")
+
+	created := decode(t, callTool(t, sc, "add_task",
+		map[string]any{"project": "demo", "title": "指派给 agent", "assignee": "codex"}))
+	id, _ := created["ID"].(float64)
+	if id < 1 {
+		t.Fatalf("add_task must succeed on existing agent assignee: %v", created)
+	}
+	if got := memberByName(t, s, "codex"); got.ID != agent.ID || got.Type != "agent" {
+		t.Fatalf("codex 必须仍是原 agent 成员（不得改型/重建）: %+v", got)
+	}
+
+	// update_task 改派到同一 agent 成员 + 新名字（human 创建）两口径
+	created2 := decode(t, callTool(t, sc, "add_task",
+		map[string]any{"project": "demo", "title": "待改派"}))
+	id2, _ := created2["ID"].(float64)
+	tests := []struct {
+		name     string
+		assignee string
+		wantType string
+	}{
+		{"update_task 改派既有 agent 成员", "codex", "agent"},
+		{"update_task 改派新名字按 human 创建", "dave", "human"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			callTool(t, sc, "update_task",
+				map[string]any{"id": int64(id2), "assignee": tc.assignee})
+			m := memberByName(t, s, tc.assignee)
+			if m.Type != tc.wantType {
+				t.Fatalf("成员 %s 类型 = %q, want %q", tc.assignee, m.Type, tc.wantType)
+			}
+			list := decodeList(t, callTool(t, sc, "list_tasks",
+				map[string]any{"project": "demo", "assignee": tc.assignee}))
+			var hit bool
+			for _, it := range list {
+				if v, _ := it.(map[string]any)["ID"].(float64); int64(v) == int64(id2) {
+					hit = true
+				}
+			}
+			if !hit {
+				t.Fatalf("改派后任务 %d 必须能在 assignee=%s 过滤下看到: %s", int64(id2), tc.assignee, fmtList(list))
+			}
+		})
+	}
+}

@@ -330,3 +330,47 @@ func TestPublishRejectsUnknownReport(t *testing.T) {
 		t.Fatalf("非法 report 不应产生任何调用: %+v", fake.calls)
 	}
 }
+
+// TestPublishSyncActorResolution 预发布同步的执行者口径（issue #2 回归）：
+// 执行者是既有 agent 成员时同步必须照常进行（修复前 Resolve 把 agent 名放
+// human 槽位撞类型冲突，且 err==nil 守卫把错误整个吞掉——同步无声跳过、报表
+// 基于本地旧数据沉淀还报成功）；解析失败时必须把「同步已跳过」落成警告。
+func TestPublishSyncActorResolution(t *testing.T) {
+	s, p := publishEnv(t, true)
+	if _, err := s.GetOrCreateMember("codex", "agent"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 执行者为既有 agent 成员：预同步照常（RecordSearch 可见），且无告警
+	fake := &fakeAPI{}
+	warn := captureWarn(t)
+	if err := PublishReport(context.Background(), clientWith(fake), s, p, "weekly", "codex"); err != nil {
+		t.Fatalf("PublishReport with agent actor: %v", err)
+	}
+	var sawSync bool
+	for _, c := range fake.calls {
+		if c.method == "RecordSearch" {
+			sawSync = true
+		}
+	}
+	if !sawSync {
+		t.Fatalf("agent 执行者必须照常预同步（不得静默跳过）: calls=%v", fake.calls)
+	}
+	if w := warn.String(); w != "" {
+		t.Fatalf("agent 执行者不应产生告警: %q", w)
+	}
+
+	// 执行者解析失败（空名）：不得发起同步，且必须落「已跳过」警告
+	fake2 := &fakeAPI{}
+	if err := PublishReport(context.Background(), clientWith(fake2), s, p, "weekly", ""); err != nil {
+		t.Fatalf("PublishReport with empty actor: %v", err)
+	}
+	for _, c := range fake2.calls {
+		if c.method == "RecordSearch" {
+			t.Fatalf("解析失败时不得发起同步: calls=%v", fake2.calls)
+		}
+	}
+	if w := warn.String(); !strings.Contains(w, "预发布同步已跳过") {
+		t.Fatalf("同步被跳过必须落警告（不得无声）: %q", w)
+	}
+}

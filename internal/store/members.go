@@ -44,6 +44,19 @@ func (s *Store) GetOrCreateMember(name, typ string) (model.Member, error) {
 	return m, nil
 }
 
+// GetOrCreateMemberAs 宽松档：按名字取回成员，**类型以库里既有成员为准**；
+// 不存在才按 typ 创建。与 GetOrCreateMember 的严格档互补——执行者/指派人等
+// 「名字进来、类型不该由调用方默认值说了算」的调用面用它：同名 agent 成员
+// 不会因为调用方缺省 human 而撞类型冲突（issue #2）。
+func (s *Store) GetOrCreateMemberAs(name, typ string) (model.Member, error) {
+	if m, found, err := s.GetMemberByName(name); err != nil {
+		return model.Member{}, err
+	} else if found {
+		return m, nil
+	}
+	return s.GetOrCreateMember(name, typ)
+}
+
 // SetMemberCapacity 更新成员每周可投入人日；成员不存在时报错。
 func (s *Store) SetMemberCapacity(id int64, capacity float64) error {
 	res, err := s.db.Exec(`UPDATE members SET capacity_days_per_week = ? WHERE id = ?`, capacity, id)
