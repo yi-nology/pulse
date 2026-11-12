@@ -1,8 +1,9 @@
 package reports
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func GanttHTML(s *store.Store, projectID int64) ([]byte, error) {
 	}
 	for id := range depsByTask {
 		ids := depsByTask[id]
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		slices.Sort(ids)
 	}
 
 	type barTask struct {
@@ -116,11 +117,11 @@ func GanttHTML(s *store.Store, projectID int64) ([]byte, error) {
 		totalDays = int(maxT.Sub(minT).Hours()/24) + 1 // 含首尾两天
 	}
 	place := func(list []barTask) []ganttBar {
-		sort.Slice(list, func(i, j int) bool {
-			if !list[i].start.Equal(list[j].start) {
-				return list[i].start.Before(list[j].start)
+		slices.SortFunc(list, func(a, b barTask) int {
+			if c := a.start.Compare(b.start); c != 0 {
+				return c
 			}
-			return list[i].task.ID < list[j].task.ID
+			return cmp.Compare(a.task.ID, b.task.ID)
 		})
 		out := make([]ganttBar, 0, len(list))
 		for _, b := range list {

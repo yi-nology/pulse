@@ -1,9 +1,10 @@
 package reports
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -199,10 +200,10 @@ func nextDay(t time.Time) time.Time {
 }
 
 func sortByDueID(ts []model.Task) {
-	sort.Slice(ts, func(i, j int) bool {
-		if ts[i].DueDate != ts[j].DueDate {
-			return ts[i].DueDate < ts[j].DueDate
+	slices.SortFunc(ts, func(a, b model.Task) int {
+		if c := strings.Compare(a.DueDate, b.DueDate); c != 0 {
+			return c
 		}
-		return ts[i].ID < ts[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 }
