@@ -11,9 +11,10 @@
 package reports
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,7 +95,7 @@ func agentContribution(acts []model.Activity, members []model.Member) []agentCou
 	for name, n := range counts {
 		out = append(out, agentCount{Name: name, Count: n})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b agentCount) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 
@@ -119,16 +120,21 @@ func nextWeekPlan(tasks []model.Task, from, to time.Time) []model.Task {
 			out = append(out, t)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		di, oki := parseDate(out[i].DueDate)
-		dj, okj := parseDate(out[j].DueDate)
-		if oki != okj {
-			return oki // 有 due 的排前面
+	slices.SortFunc(out, func(a, b model.Task) int {
+		da, oka := parseDate(a.DueDate)
+		db, okb := parseDate(b.DueDate)
+		if oka != okb {
+			if oka {
+				return -1 // 有 due 的排前面
+			}
+			return 1
 		}
-		if oki && !di.Equal(dj) {
-			return di.Before(dj)
+		if oka {
+			if c := da.Compare(db); c != 0 {
+				return c
+			}
 		}
-		return out[i].ID < out[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return out
 }
